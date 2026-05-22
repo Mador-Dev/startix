@@ -1,6 +1,4 @@
 import { Router } from "express";
-import { promises as fs } from "fs";
-import path from "path";
 import type { Response, NextFunction } from "express";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
 import type { UserWorkspace } from "../middleware/userIsolation.js";
@@ -39,7 +37,6 @@ import {
   disconnectUserWhatsAppChannel,
   getUserChannelConnectivity,
 } from "../services/channelService.js";
-import { triggerUserJob } from "../services/jobTriggerService.js";
 
 const router = Router();
 
@@ -240,24 +237,14 @@ router.post(
       },
     });
 
-    const triggered = await triggerUserJob({
-      workspace: ws,
-      action: "full_report",
-      source: "dashboard_action",
-    });
-    if (triggered.statusCode >= 400) {
-      res.status(triggered.statusCode).json(triggered.body);
-      return;
-    }
-
+    // Prepare the workspace (strategy stubs, ticker dirs, state → BOOTSTRAPPING).
+    // The actual job is triggered by the client on the agents service after this returns.
     await startUserBootstrap(ws.userId);
 
     res.status(200).json({
       state: "BOOTSTRAPPING",
-      jobId: triggered.body["jobId"],
-      stepQueue: triggered.body["stepQueue"] === true,
       guidanceStepPending: false,
-      message: "Account launched. Analysis will begin shortly.",
+      message: "Account launched. Trigger a full_report job on the agents service to begin analysis.",
     });
   })
 );

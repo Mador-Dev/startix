@@ -14,6 +14,7 @@ import {
   submitPortfolio,
   type PositionEntry,
 } from "../api/onboarding";
+import { triggerJob } from "../api/jobs";
 import { login } from "../api/auth";
 import { generateId } from "../utils/id";
 import { apiClient } from "../api/client";
@@ -817,6 +818,13 @@ export function Onboarding() {
         skip,
         guidance: skip ? {} : buildGuidancePayload(),
       });
+      // Kick off the initial full-report analysis on the agents service.
+      // Non-fatal: if agents is unavailable the user can re-trigger from the portfolio page.
+      try {
+        await triggerJob("full_report");
+      } catch (agentsErr) {
+        console.warn("[Onboarding] agents job trigger failed (non-fatal):", agentsErr);
+      }
       await queryClient.invalidateQueries({ queryKey: ["onboard-status"] });
       await queryClient.refetchQueries({ queryKey: ["onboard-status"], type: "active" });
       navigate("/portfolio", { replace: true });

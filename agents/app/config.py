@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("APP_DATABASE_URL", "DATABASE_URL"),
     )
+    jwt_secret: str = Field(default="changeme", alias="JWT_SECRET")
     users_dir: str = Field(default="../users", alias="USERS_DIR")
     bootstrap_max_concurrency: int = Field(default=3, alias="BOOTSTRAP_MAX_CONCURRENCY")
     bootstrap_include_bull_bear: bool = Field(default=True, alias="BOOTSTRAP_INCLUDE_BULL_BEAR")

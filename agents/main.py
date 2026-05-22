@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+import jwt
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from agents.app.chat_service import ChatService
+from agents.app.config import get_settings
 from agents.app.jobs_service import JobsService
 from agents.app.schemas import (
     BootstrapJobResult,
@@ -41,12 +44,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_bearer = HTTPBearer()
 
-def require_user_id(x_user_id: str | None = Header(default=None)) -> str:
-    user_id = (x_user_id or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing X-User-Id header")
-    return user_id
+
+def require_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> str:
+    """Validate the JWT Bearer token and return the userId claim."""
+    settings = get_settings()
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret,
+            algorithms=["HS256"],
+            options={"verify_exp": False},  # backend issues 7d tokens; exp check is optional
+        )
+        user_id: str | None = payload.get("userId")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token: missing userId")
+        return user_id
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
 
 
 @app.get("/health")
@@ -54,14 +70,28 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# ── Bootstrap ────────────────────────────────────────────────────────────────
+
+
 @app.post("/api/bootstrap/start", response_model=BootstrapStartResponse)
-async def start_bootstrap(payload: BootstrapStartRequest) -> BootstrapStartResponse:
+async def start_bootstrap(
+    payload: BootstrapStartRequest,
+    user_id: str = Depends(require_user),
+) -> BootstrapStartResponse:
+    if payload.userId != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     job = await bootstrap_service.start_bootstrap(payload)
     return BootstrapStartResponse(jobId=job.jobId, status=job.status, totalTickers=job.totalTickers)
 
 
 @app.get("/api/bootstrap/jobs/{user_id}/{job_id}")
-async def get_bootstrap_job(user_id: str, job_id: str) -> dict:
+async def get_bootstrap_job(
+    user_id: str,
+    job_id: str,
+    jwt_user: str = Depends(require_user),
+) -> dict:
+    if jwt_user != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         return bootstrap_service.get_job(user_id, job_id).model_dump()
     except FileNotFoundError as exc:
@@ -69,7 +99,13 @@ async def get_bootstrap_job(user_id: str, job_id: str) -> dict:
 
 
 @app.get("/api/bootstrap/jobs/{user_id}/{job_id}/result", response_model=BootstrapJobResult)
-async def get_bootstrap_result(user_id: str, job_id: str) -> BootstrapJobResult:
+async def get_bootstrap_result(
+    user_id: str,
+    job_id: str,
+    jwt_user: str = Depends(require_user),
+) -> BootstrapJobResult:
+    if jwt_user != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         return bootstrap_service.get_result(user_id, job_id)
     except FileNotFoundError as exc:
@@ -77,7 +113,12 @@ async def get_bootstrap_result(user_id: str, job_id: str) -> BootstrapJobResult:
 
 
 @app.get("/api/bootstrap/strategies/{user_id}")
-async def list_bootstrap_strategies(user_id: str) -> dict:
+async def list_bootstrap_strategies(
+    user_id: str,
+    jwt_user: str = Depends(require_user),
+) -> dict:
+    if jwt_user != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     ws = bootstrap_service.store.workspace(user_id)
     strategies = []
     for strategy_path in ws.tickers_dir.glob("*/strategy.json"):
@@ -85,8 +126,11 @@ async def list_bootstrap_strategies(user_id: str) -> dict:
     return {"userId": user_id, "strategies": strategies}
 
 
+# ── Jobs ─────────────────────────────────────────────────────────────────────
+
+
 @app.get("/api/jobs", response_model=JobsResponse)
-async def list_jobs(user_id: str = Depends(require_user_id)) -> JobsResponse:
+async def list_jobs(user_id: str = Depends(require_user)) -> JobsResponse:
     try:
         return jobs_service.list_jobs(user_id)
     except FileNotFoundError as exc:
@@ -94,7 +138,7 @@ async def list_jobs(user_id: str = Depends(require_user_id)) -> JobsResponse:
 
 
 @app.get("/api/jobs/{job_id}")
-async def get_job(job_id: str, user_id: str = Depends(require_user_id)) -> dict:
+async def get_job(job_id: str, user_id: str = Depends(require_user)) -> dict:
     try:
         return jobs_service.get_job(user_id, job_id).model_dump()
     except FileNotFoundError as exc:
@@ -102,7 +146,10 @@ async def get_job(job_id: str, user_id: str = Depends(require_user_id)) -> dict:
 
 
 @app.post("/api/jobs/trigger", response_model=TriggerResponse, status_code=201)
-async def trigger_job(payload: TriggerJobRequest, user_id: str = Depends(require_user_id)) -> TriggerResponse:
+async def trigger_job(
+    payload: TriggerJobRequest,
+    user_id: str = Depends(require_user),
+) -> TriggerResponse:
     try:
         job = await jobs_service.trigger(user_id, payload)
     except FileNotFoundError as exc:
@@ -113,7 +160,7 @@ async def trigger_job(payload: TriggerJobRequest, user_id: str = Depends(require
 
 
 @app.delete("/api/jobs/{job_id}")
-async def cancel_job(job_id: str, user_id: str = Depends(require_user_id)) -> dict:
+async def cancel_job(job_id: str, user_id: str = Depends(require_user)) -> dict:
     try:
         job = await jobs_service.cancel(user_id, job_id)
     except FileNotFoundError as exc:
@@ -122,7 +169,7 @@ async def cancel_job(job_id: str, user_id: str = Depends(require_user_id)) -> di
 
 
 @app.post("/api/jobs/{job_id}/resume")
-async def resume_job(job_id: str, user_id: str = Depends(require_user_id)) -> dict:
+async def resume_job(job_id: str, user_id: str = Depends(require_user)) -> dict:
     try:
         job = await jobs_service.resume(user_id, job_id)
     except FileNotFoundError as exc:
@@ -130,8 +177,14 @@ async def resume_job(job_id: str, user_id: str = Depends(require_user_id)) -> di
     return {"resumed": True, "job": job.model_dump()}
 
 
+# ── Chat ─────────────────────────────────────────────────────────────────────
+
+
 @app.post("/api/chat/messages", response_model=ChatMessageResponse)
-async def send_chat_message(payload: ChatMessageRequest, user_id: str = Depends(require_user_id)) -> ChatMessageResponse:
+async def send_chat_message(
+    payload: ChatMessageRequest,
+    user_id: str = Depends(require_user),
+) -> ChatMessageResponse:
     try:
         conversation_id = payload.conversationId or chat_service.create_conversation(user_id, None).id
         return await chat_service.send_message(user_id, payload.text, conversation_id)
@@ -145,7 +198,7 @@ async def send_chat_message(payload: ChatMessageRequest, user_id: str = Depends(
 async def list_conversations(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    user_id: str = Depends(require_user_id),
+    user_id: str = Depends(require_user),
 ) -> SavedConversationListResponse:
     try:
         return chat_service.list_conversations(user_id, limit, offset)
@@ -154,13 +207,19 @@ async def list_conversations(
 
 
 @app.post("/api/chat/conversations", response_model=SavedConversationResponse, status_code=201)
-async def create_conversation(payload: ConversationCreateRequest, user_id: str = Depends(require_user_id)) -> SavedConversationResponse:
+async def create_conversation(
+    payload: ConversationCreateRequest,
+    user_id: str = Depends(require_user),
+) -> SavedConversationResponse:
     conversation = chat_service.create_conversation(user_id, payload.title)
     return SavedConversationResponse(conversation=conversation)
 
 
 @app.get("/api/chat/conversations/{conversation_id}", response_model=ConversationHistory)
-async def get_conversation(conversation_id: str, user_id: str = Depends(require_user_id)) -> ConversationHistory:
+async def get_conversation(
+    conversation_id: str,
+    user_id: str = Depends(require_user),
+) -> ConversationHistory:
     try:
         return chat_service.get_conversation(user_id, conversation_id)
     except FileNotFoundError as exc:
@@ -171,7 +230,7 @@ async def get_conversation(conversation_id: str, user_id: str = Depends(require_
 async def rename_conversation(
     conversation_id: str,
     payload: ConversationRenameRequest,
-    user_id: str = Depends(require_user_id),
+    user_id: str = Depends(require_user),
 ) -> SavedConversationResponse:
     try:
         conversation = chat_service.rename_conversation(user_id, conversation_id, payload.title)
@@ -181,7 +240,10 @@ async def rename_conversation(
 
 
 @app.delete("/api/chat/conversations/{conversation_id}", response_model=SavedConversationResponse)
-async def archive_conversation(conversation_id: str, user_id: str = Depends(require_user_id)) -> SavedConversationResponse:
+async def archive_conversation(
+    conversation_id: str,
+    user_id: str = Depends(require_user),
+) -> SavedConversationResponse:
     try:
         conversation = chat_service.archive_conversation(user_id, conversation_id)
     except FileNotFoundError as exc:
