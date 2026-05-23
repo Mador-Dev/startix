@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle, XCircle } from "lucide-react";
 import { triggerJob, fetchJobs } from "../api/jobs";
@@ -34,10 +34,11 @@ function ActionCard({
   const language = usePreferencesStore((s) => s.language);
   const queryClient = useQueryClient();
   const [tickerSelection, setTickerSelection] = useState<TickerSelection | null>(null);
-  const [loading, setLoading] = useState(false);
+  const submittingRef = useRef(false);
   const showToast = useToastStore((s) => s.show);
 
   const handleTrigger = async () => {
+    if (submittingRef.current) return;
     if (blocked) {
       showToast(blockedReason ?? "This feature is currently blocked.", "info");
       return;
@@ -46,7 +47,7 @@ function ActionCard({
       showToast(t("tickerRequired", language), "warning");
       return;
     }
-    setLoading(true);
+    submittingRef.current = true;
     try {
       const res = await triggerJob(action, tickerRequired ? tickerSelection?.symbol : undefined);
       void queryClient.invalidateQueries({ queryKey: ["balance"] });
@@ -58,7 +59,7 @@ function ActionCard({
       const reason = axiosErr.response?.data?.reason || axiosErr.response?.data?.error;
       showToast(reason || `${t("jobFailed", language)}: ${action}`, "error");
     } finally {
-      setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -86,14 +87,14 @@ function ActionCard({
       ) : null}
       <button
         onClick={handleTrigger}
-        disabled={blocked || loading || (tickerRequired && !tickerSelection)}
+        disabled={blocked || (tickerRequired && !tickerSelection)}
         className={`w-full py-2 rounded-lg text-xs font-bold disabled:opacity-50 mt-1 ${
           blocked
             ? "border border-[var(--color-border)] bg-[var(--color-bg-muted)] text-[var(--color-fg-subtle)]"
             : "bg-[var(--color-primary)] text-[var(--color-primary-fg)]"
         }`}
       >
-        {blocked ? t("comingSoon", language) : loading ? "..." : t("run", language)}
+        {blocked ? t("comingSoon", language) : t("run", language)}
       </button>
     </Card>
   );

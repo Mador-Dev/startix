@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -7,9 +7,12 @@ import {
   ChevronDown,
   ChevronUp,
   Clock3,
+  Eye,
   ExternalLink,
   FileSearch,
+  Layers3,
   Radar,
+  ShieldAlert,
   Sparkles,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -63,7 +66,7 @@ const FILTERS: Array<{ id: ReportFilter; label: string }> = [
   { id: "all", label: "All" },
   { id: "daily_brief", label: "Daily brief" },
   { id: "deep_dive", label: "Deep dive" },
-  { id: "full_report", label: "Weekly Report" },
+  { id: "full_report", label: "Full report" },
   { id: "quick_check", label: "Quick check" },
   { id: "new_ideas", label: "New ideas" },
 ];
@@ -82,7 +85,7 @@ const MODE_META: Record<string, { label: string; icon: ReactElement }> = {
     icon: <BrainCircuit size={12} />,
   },
   full_report: {
-    label: "Weekly Report",
+    label: "Full report",
     icon: <FileSearch size={12} />,
   },
   new_ideas: {
@@ -98,6 +101,15 @@ const VERDICT_COLORS: Record<string, string> = {
   BUY: "bg-blue-500/15 text-blue-300 border-blue-500/25",
   ADD: "bg-blue-500/15 text-blue-300 border-blue-500/25",
   HOLD: "bg-[var(--color-bg-muted)] text-[var(--color-fg-muted)] border-[var(--color-border)]",
+};
+
+const VERDICT_SYMBOLS: Record<string, string> = {
+  BUY: "↑",
+  ADD: "+",
+  HOLD: "•",
+  REDUCE: "↓",
+  SELL: "×",
+  CLOSE: "×",
 };
 
 const CONFIDENCE_COLORS: Record<string, string> = {
@@ -168,6 +180,20 @@ function groupEntries(entries: FeedItemEntry[]) {
     positive: entries.filter((e) => POSITIVE.has(e.verdict)),
     onTrack: entries.filter((e) => !ESCALATED.has(e.verdict) && !POSITIVE.has(e.verdict)),
   };
+}
+
+function sortEntriesForReview(entries: FeedItemEntry[]): FeedItemEntry[] {
+  return [...entries].sort((a, b) => {
+    const weight = (entry: FeedItemEntry) => {
+      if (ESCALATED.has(entry.verdict)) return 0;
+      if (entry.deepDiveQueued) return 1;
+      if (POSITIVE.has(entry.verdict)) return 2;
+      return 3;
+    };
+    const diff = weight(a) - weight(b);
+    if (diff !== 0) return diff;
+    return a.ticker.localeCompare(b.ticker);
+  });
 }
 
 async function fetchDetailReports(
@@ -271,6 +297,104 @@ function SourceLinks({ sources }: { sources: unknown }) {
   );
 }
 
+function SummaryChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-[var(--color-bg-muted)] px-3 py-2">
+      <p className="text-xs text-[var(--color-fg-subtle)]">{label}</p>
+      <p className="mt-1 text-sm font-medium text-[var(--color-fg-default)]">{value}</p>
+    </div>
+  );
+}
+
+function SignalBadge({
+  icon,
+  label,
+  tone = "default",
+}: {
+  icon: ReactNode;
+  label: string;
+  tone?: "default" | "warning" | "info";
+}) {
+  const toneClass =
+    tone === "warning"
+      ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+      : tone === "info"
+        ? "border-sky-500/20 bg-sky-500/10 text-sky-300"
+        : "border-[var(--color-border)] bg-[var(--color-bg-muted)] text-[var(--color-fg-muted)]";
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${toneClass}`}>
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+function InsightSection({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-xl bg-[var(--color-bg-base)] px-1 py-1">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium text-[var(--color-fg-subtle)]">{title}</p>
+          {subtitle ? <p className="mt-1 text-sm leading-6 text-[var(--color-fg-muted)]">{subtitle}</p> : null}
+        </div>
+      </div>
+      <div className="mt-3">{children}</div>
+    </section>
+  );
+}
+
+function FeedTickerCard({
+  ticker,
+  tone = "default",
+  headline,
+  detail,
+  meta = [],
+  trailing,
+}: {
+  ticker: string;
+  tone?: "default" | "warning" | "info";
+  headline?: ReactNode;
+  detail: ReactNode;
+  meta?: string[];
+  trailing?: ReactNode;
+}) {
+  const toneClass =
+    tone === "warning"
+      ? "bg-amber-500/10"
+      : tone === "info"
+        ? "bg-sky-500/10"
+        : "bg-[var(--color-bg-muted)]";
+
+  return (
+    <div className={`rounded-lg px-3 py-3 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-[var(--color-fg-default)]">{ticker}</p>
+          {headline ? <div className="mt-1 text-xs leading-5 text-[var(--color-fg-default)]">{headline}</div> : null}
+        </div>
+        {trailing ? <div className="shrink-0">{trailing}</div> : null}
+      </div>
+      <div className="mt-2 text-xs leading-5 text-[var(--color-fg-muted)]">{detail}</div>
+      {meta.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-[var(--color-fg-subtle)]">
+          {meta.map((item) => (
+            <span key={item}>{item}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ─── Active job card ──────────────────────────────────────────────────────────
 
 function ActiveJobCard({
@@ -291,7 +415,7 @@ function ActiveJobCard({
   const statusLabel = job.status === "pending" ? "queued" : job.status === "paused" ? "paused" : "running";
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-4">
+    <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
@@ -316,6 +440,17 @@ function ActiveJobCard({
               </span>
             ) : null}
           </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <SummaryChip label="Status" value={statusLabel} />
+            <SummaryChip
+              label="Scope"
+              value={hasChain ? `${prog?.totalTickers ?? 0} tickers` : job.ticker ?? meta.label}
+            />
+            <SummaryChip
+              label="Updated"
+              value={formatDate(job.started_at ?? job.triggered_at)}
+            />
+          </div>
         </div>
 
         <div className="shrink-0 text-right">
@@ -1175,7 +1310,7 @@ function ReportCard({
   const language = usePreferencesStore((s) => s.language);
   const meta = modeMeta(item.mode);
   const entries = Object.values(item.entries);
-  const { escalated, positive, onTrack } = groupEntries(entries);
+  const { escalated } = groupEntries(entries);
   const selectedEntry = selectedTicker ? item.entries[selectedTicker] : entries[0];
   const isMultiTicker = item.tickers.length > 1;
   const isBriefMode = item.mode === "daily_brief" || item.mode === "full_report";
@@ -1202,38 +1337,83 @@ function ReportCard({
     item.mode === "daily_brief" && !hasDailyQueueMetadata && attentionDailyEntries.length > 0
       ? "These positions were flagged for attention. This older daily brief did not store exact auto-queue metadata, so it should not be read as proof that every listed ticker had a deep dive queued."
       : item.dailyBrief?.tomorrow;
-
+  const orderedEntries = sortEntriesForReview(entries);
+  const topEntries = orderedEntries.slice(0, 1);
+  const flaggedCount = escalated.length + attentionDailyEntries.length;
+  const badgeTone = flaggedCount > 0 ? "warning" : trackingDailyEntries.length > 0 ? "info" : "default";
+  const summaryMetrics = [
+    {
+      label: "Coverage",
+      value: isBriefMode
+        ? `${item.tickerCount} positions`
+        : `${selectedEntry?.ticker ?? item.tickers[0] ?? "—"}`,
+    },
+  ];
   // Tabs: don't show bear_case as its own tab (rendered inside bull_case tab)
   const visibleTabs = expandedReportTypes.filter((t) => t !== "bear_case");
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)]">
+    <div className="overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-subtle)] shadow-sm">
       {/* ── Tappable header ── */}
       <button type="button" onClick={onToggle} className="w-full text-left">
         <div className="p-4">
           {/* Mode + date row */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-              <span>{meta.icon}</span>
-              <span>{meta.label}</span>
-              {item.tickerCount > 1 ? (
-                <span className="rounded-full bg-[var(--color-bg-muted)] px-1.5 py-0.5 text-[9px]">
-                  {item.tickerCount}
-                </span>
-              ) : null}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] text-[var(--color-fg-subtle)]">
+                {meta.icon}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-fg-subtle)]">
+                  <span>{meta.label}</span>
+                  {item.tickerCount > 1 ? (
+                    <span className="rounded-full bg-[var(--color-bg-muted)] px-1.5 py-0.5 text-[10px]">
+                      {item.tickerCount}
+                    </span>
+                  ) : null}
+                </div>
+                <h4 className="mt-1 truncate text-base font-semibold text-[var(--color-fg-default)]">{item.title}</h4>
+              </div>
             </div>
-            <span className="text-[10px] text-[var(--color-fg-subtle)]">{formatDate(item.createdAt)}</span>
+            <div className="shrink-0 text-right">
+              <span className="block text-xs text-[var(--color-fg-subtle)]">{formatDate(item.createdAt)}</span>
+            </div>
           </div>
 
-          {/* Title */}
-          <h4 className="mt-2 text-sm font-bold text-[var(--color-fg-default)]">{item.title}</h4>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <SignalBadge
+              icon={flaggedCount > 0 ? <ShieldAlert size={12} /> : trackingDailyEntries.length > 0 ? <Eye size={12} /> : <Layers3 size={12} />}
+              label={
+                flaggedCount > 0
+                  ? `${flaggedCount} need review`
+                  : trackingDailyEntries.length > 0
+                    ? `${trackingDailyEntries.length} watchlist names`
+                    : `${item.tickerCount} names covered`
+              }
+              tone={badgeTone}
+            />
+            {queuedDailyEntries.length > 0 ? (
+              <SignalBadge icon={<Radar size={12} />} label={`${queuedDailyEntries.length} deep dives queued`} tone="info" />
+            ) : null}
+            {!isBriefMode && selectedEntry?.verdict ? (
+              <SignalBadge
+                icon={<span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px] leading-none">{VERDICT_SYMBOLS[selectedEntry.verdict] ?? "•"}</span>}
+                label={selectedEntry.verdict}
+                tone="default"
+              />
+            ) : null}
+          </div>
+
+          <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
+            Coverage: {summaryMetrics[0]?.value}
+          </p>
 
           {/* Escalation alert — non-interactive colored tags for brief modes */}
-          {isBriefMode && escalated.length > 0 ? (
+          {false ? (
             <div className="mt-3">
               <div className="mb-2 flex items-center gap-1.5">
                 <AlertTriangle size={11} className="text-yellow-400" />
-                <span className="text-[11px] font-bold text-yellow-400">
+                <span className="text-sm font-medium text-yellow-400">
                   {escalated.length} position{escalated.length !== 1 ? "s" : ""} flagged
                 </span>
               </div>
@@ -1241,7 +1421,7 @@ function ReportCard({
                 {escalated.map((e) => (
                   <span
                     key={e.ticker}
-                    className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${VERDICT_COLORS[e.verdict] ?? ""}`}
+                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${VERDICT_COLORS[e.verdict] ?? ""}`}
                   >
                     <span className="font-bold">{e.ticker}</span>
                     <span className="mx-1 opacity-40">·</span>
@@ -1255,18 +1435,21 @@ function ReportCard({
           {/* Single-ticker verdict (deep dive / quick check / new ideas) */}
           {!isBriefMode && selectedEntry ? (
             <div className="mt-3 flex items-center gap-2">
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-bold ${VERDICT_COLORS[selectedEntry.verdict] ?? ""}`}>
+              <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${VERDICT_COLORS[selectedEntry.verdict] ?? ""}`}>
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px] leading-none">
+                  {VERDICT_SYMBOLS[selectedEntry.verdict] ?? "•"}
+                </span>
                 {selectedEntry.verdict}
               </span>
-              <span className={`text-xs font-medium ${CONFIDENCE_COLORS[selectedEntry.confidence] ?? "text-[var(--color-fg-muted)]"}`}>
+              <span className={`text-sm font-medium ${CONFIDENCE_COLORS[selectedEntry.confidence] ?? "text-[var(--color-fg-muted)]"}`}>
                 {tConfidence(selectedEntry.confidence, language)}
               </span>
               {selectedEntry.timeframe && selectedEntry.timeframe !== "undefined" ? (
-                <span className="text-[11px] text-[var(--color-fg-subtle)]">· {selectedEntry.timeframe}</span>
+                <span className="text-xs text-[var(--color-fg-subtle)]">· {selectedEntry.timeframe}</span>
               ) : null}
             </div>
           ) : null}
-          {!isBriefMode && selectedEntry ? (
+          {!isBriefMode && selectedEntry && expanded ? (
             <p className="mt-2 text-[12px] leading-5 text-[var(--color-fg-muted)]">
               {isVerdict(selectedEntry.verdict) ? `${verdictSentence(selectedEntry.verdict)} ` : ""}
               {confidenceExplanation(selectedEntry.confidence)}
@@ -1274,8 +1457,16 @@ function ReportCard({
           ) : null}
 
           {/* Summary — clamped in collapsed state, full text in expanded panel */}
-          <p className={`mt-2 text-[13px] leading-5 text-[var(--color-fg-muted)] ${!expanded ? "line-clamp-4" : ""}`}>{item.summary}</p>
-          {trackingEntry ? (
+          <p className={`mt-2 text-sm leading-6 text-[var(--color-fg-muted)] ${!expanded ? "line-clamp-2" : ""}`}>{item.summary}</p>
+          {topEntries.length > 0 ? (
+            <div className="mt-2 flex items-start gap-2 text-sm leading-6 text-[var(--color-fg-muted)]">
+              <span className="mt-1 inline-flex h-2 w-2 shrink-0 rounded-full bg-[var(--color-accent-blue)]" />
+              <p className="line-clamp-1">
+                {topEntries[0]?.ticker}: {topEntries[0]?.moveReason ?? topEntries[0]?.deepDiveQueueReason ?? topEntries[0]?.reasoning}
+              </p>
+            </div>
+          ) : null}
+          {trackingEntry && expanded ? (
             <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-muted)] px-3 py-2">
               <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">Tracked idea</p>
               <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-[var(--color-fg-muted)]">
@@ -1288,145 +1479,139 @@ function ReportCard({
               </div>
             </div>
           ) : null}
-          {item.dailyBrief?.marketView ? (
-            <p className="mt-2 text-[12px] leading-5 text-[var(--color-fg-subtle)]">{item.dailyBrief.marketView}</p>
+          {item.dailyBrief?.marketView && expanded ? (
+            <p className="mt-2 text-sm leading-6 text-[var(--color-fg-subtle)]">{item.dailyBrief.marketView}</p>
           ) : null}
 
-          {/* On-track peek (only collapsed brief mode) */}
-          {isBriefMode && !expanded && onTrack.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {[...positive, ...onTrack].slice(0, 7).map((e) => (
-                <span
-                  key={e.ticker}
-                  className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-muted)] px-2 py-0.5 text-[10px] text-[var(--color-fg-subtle)]"
-                >
-                  {e.ticker}
-                </span>
-              ))}
-              {positive.length + onTrack.length > 7 ? (
-                <span className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-muted)] px-2 py-0.5 text-[10px] text-[var(--color-fg-subtle)]">
-                  +{positive.length + onTrack.length - 7} more
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* Expand toggle */}
-          <div className="mt-3 flex justify-end text-[var(--color-fg-subtle)]">
-            {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          <div className="mt-3">
+            <span className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-4 text-sm font-medium text-[var(--color-fg-default)] shadow-sm">
+              {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              {expanded ? "Hide report" : "Open report"}
+            </span>
           </div>
+
         </div>
       </button>
 
       {/* ── Expanded panel ── */}
       {expanded ? (
-        <div className="border-t border-[var(--color-border)]">
+        <div className="border-t border-[var(--color-border)] bg-[var(--color-bg-base)]/60">
           {item.dailyBrief ? (
-            <div className="px-4 pt-4">
-              <div className="space-y-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-4">
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">What happened today</p>
-                  {item.dailyBrief.headline ? <p className="mt-2 text-sm font-bold text-[var(--color-fg-default)]">{item.dailyBrief.headline}</p> : null}
-                  {item.dailyBrief.today ? <p className="mt-2 text-sm leading-6 text-[var(--color-fg-muted)]">{item.dailyBrief.today}</p> : null}
-                </div>
+            <div className="px-5 py-5">
+              <div className="space-y-5">
+                <InsightSection
+                  title="Session brief"
+                  subtitle={item.dailyBrief.headline ?? "A structured readout of what changed across the portfolio and watchlist."}
+                >
+                  {item.dailyBrief.today ? <p className="text-sm leading-6 text-[var(--color-fg-muted)]">{item.dailyBrief.today}</p> : null}
+                </InsightSection>
                 {portfolioMovers.length > 0 ? (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">Biggest portfolio movers</p>
-                    <div className="mt-2 space-y-2">
+                  <InsightSection
+                    title="Biggest portfolio movers"
+                    subtitle="Largest same-day changes with the analyst explanation attached to each position."
+                  >
+                    <div className="space-y-2">
                       {portfolioMovers.map((entry) => (
-                        <div key={entry.ticker} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-muted)] px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-bold text-[var(--color-fg-default)]">{entry.ticker}</span>
-                            <span className={`text-xs font-bold ${(entry.dayChangePct ?? 0) >= 0 ? "text-[var(--color-accent-green)]" : "text-[var(--color-accent-red)]"}`}>
+                        <FeedTickerCard
+                          key={entry.ticker}
+                          ticker={entry.ticker}
+                          detail={entry.moveReason ?? entry.reasoning}
+                          trailing={
+                            <span className={`text-xs font-semibold ${(entry.dayChangePct ?? 0) >= 0 ? "text-[var(--color-accent-green)]" : "text-[var(--color-accent-red)]"}`}>
                               {(entry.dayChangePct ?? 0) > 0 ? "+" : ""}{entry.dayChangePct ?? 0}%
                             </span>
-                          </div>
-                          <p className="mt-1 text-xs leading-5 text-[var(--color-fg-muted)]">{entry.moveReason ?? entry.reasoning}</p>
-                        </div>
+                          }
+                        />
                       ))}
                     </div>
-                  </div>
+                  </InsightSection>
                 ) : null}
                 {trackingDailyEntries.length > 0 ? (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">Tracking watchlist</p>
-                    <div className="mt-2 space-y-2">
+                  <InsightSection
+                    title="Tracking watchlist"
+                    subtitle="Names outside the live portfolio that the analyst believes deserve continued monitoring."
+                  >
+                    <div className="space-y-2">
                       {trackingDailyEntries.map((entry) => (
-                        <div key={entry.ticker} className="rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-bold text-[var(--color-fg-default)]">{entry.ticker}</p>
-                            {entry.stance ? <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-fg-subtle)]">{entry.stance}</span> : null}
-                          </div>
-                          <p className="mt-1 text-xs leading-5 text-[var(--color-fg-muted)]">
-                            {entry.reasoning}
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-[var(--color-fg-subtle)]">
-                            {typeof entry.potentialScore === "number" ? <span>{entry.potentialScore}/100 potential</span> : null}
-                            {typeof entry.urgencyScore === "number" ? <span>{entry.urgencyScore}/100 urgency</span> : null}
-                            {typeof entry.suggestedAllocationPct === "number" ? <span>{entry.suggestedAllocationPct.toFixed(1)}% suggested</span> : null}
-                          </div>
-                        </div>
+                        <FeedTickerCard
+                          key={entry.ticker}
+                          ticker={entry.ticker}
+                          tone="info"
+                          headline={entry.stance ? <span className="uppercase tracking-[0.12em]">{entry.stance}</span> : undefined}
+                          detail={entry.reasoning}
+                          meta={[
+                            typeof entry.potentialScore === "number" ? `${entry.potentialScore}/100 potential` : "",
+                            typeof entry.urgencyScore === "number" ? `${entry.urgencyScore}/100 urgency` : "",
+                            typeof entry.suggestedAllocationPct === "number" ? `${entry.suggestedAllocationPct.toFixed(1)}% suggested` : "",
+                          ].filter(Boolean)}
+                        />
                       ))}
                     </div>
-                  </div>
+                  </InsightSection>
                 ) : null}
                 {trackingActionEntries.length > 0 ? (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">Tracking action candidates</p>
-                    <div className="mt-2 space-y-2">
+                  <InsightSection
+                    title="Tracking action candidates"
+                    subtitle="Watchlist names with enough change or urgency to justify a deeper review."
+                  >
+                    <div className="space-y-2">
                       {trackingActionEntries.map((entry) => (
-                        <div key={entry.ticker} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2">
-                          <p className="text-sm font-bold text-[var(--color-fg-default)]">{entry.ticker}</p>
-                          <p className="mt-1 text-xs leading-5 text-[var(--color-fg-muted)]">
-                            {entry.deepDiveQueueReason ?? entry.reasoning}
-                          </p>
-                        </div>
+                        <FeedTickerCard
+                          key={entry.ticker}
+                          ticker={entry.ticker}
+                          tone="warning"
+                          detail={entry.deepDiveQueueReason ?? entry.reasoning}
+                        />
                       ))}
                     </div>
-                  </div>
+                  </InsightSection>
                 ) : null}
                 {queuedDailyEntries.length > 0 ? (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">Portfolio queued deep dives</p>
-                    <div className="mt-2 space-y-2">
+                  <InsightSection
+                    title="Queued deep dives"
+                    subtitle="Positions that this brief escalated into a deeper single-position workflow."
+                  >
+                    <div className="space-y-2">
                       {queuedDailyEntries.map((entry) => (
-                        <div key={entry.ticker} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2">
-                          <p className="text-sm font-bold text-[var(--color-fg-default)]">{entry.ticker}</p>
-                          <p className="mt-1 text-xs leading-5 text-[var(--color-fg-muted)]">
-                            {entry.reasoning}. {entry.deepDiveQueueReason ?? "Deep dive was queued by this daily brief."}
-                          </p>
-                        </div>
+                        <FeedTickerCard
+                          key={entry.ticker}
+                          ticker={entry.ticker}
+                          tone="warning"
+                          detail={`${entry.reasoning}. ${entry.deepDiveQueueReason ?? "Deep dive was queued by this daily brief."}`}
+                        />
                       ))}
                     </div>
-                  </div>
+                  </InsightSection>
                 ) : null}
                 {attentionDailyEntries.length > 0 ? (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">Portfolio needs attention, not auto-queued</p>
-                    <div className="mt-2 space-y-2">
+                  <InsightSection
+                    title="Needs review"
+                  >
+                    <div className="space-y-2">
                       {attentionDailyEntries.map((entry) => (
-                        <div key={entry.ticker} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-muted)] px-3 py-2">
-                          <p className="text-sm font-bold text-[var(--color-fg-default)]">{entry.ticker}</p>
-                          <p className="mt-1 text-xs leading-5 text-[var(--color-fg-muted)]">
-                            {entry.reasoning}. {entry.deepDiveQueueReason ?? "Flagged for attention; no deep dive queue confirmation is attached to this daily brief."}
-                          </p>
-                        </div>
+                        <FeedTickerCard
+                          key={entry.ticker}
+                          ticker={entry.ticker}
+                          detail={`${entry.reasoning}. ${entry.deepDiveQueueReason ?? "Flagged for attention; no deep dive queue confirmation is attached to this daily brief."}`}
+                        />
                       ))}
                     </div>
-                  </div>
+                  </InsightSection>
                 ) : null}
                 {item.dailyBrief.marketView || item.dailyBrief.tomorrow || item.dailyBrief.securityNote ? (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">Next watch</p>
-                    {nextWatchText ? <p className="mt-2 text-sm leading-6 text-[var(--color-fg-muted)]">{nextWatchText}</p> : null}
+                  <InsightSection
+                    title="Next watch"
+                    subtitle="What the analyst expects to matter next across the portfolio."
+                  >
+                    {nextWatchText ? <p className="text-sm leading-6 text-[var(--color-fg-muted)]">{nextWatchText}</p> : null}
                     {item.dailyBrief.marketView ? <p className="mt-2 text-sm leading-6 text-[var(--color-fg-muted)]">{item.dailyBrief.marketView}</p> : null}
                     {item.dailyBrief.securityNote ? <p className="mt-2 text-sm leading-6 text-[var(--color-fg-default)]">{item.dailyBrief.securityNote}</p> : null}
-                  </div>
+                  </InsightSection>
                 ) : null}
                 {item.dailyBrief.dashboardPath ? (
                   <Link
                     to={item.dailyBrief.dashboardPath}
-                    className="mt-3 inline-flex rounded-full border border-[var(--color-border)] bg-[var(--color-bg-muted)] px-3 py-1.5 text-xs font-medium text-[var(--color-fg-default)]"
+                    className="inline-flex rounded-full border border-[var(--color-border)] bg-[var(--color-bg-muted)] px-3 py-1.5 text-xs font-medium text-[var(--color-fg-default)]"
                   >
                     Open dashboard
                   </Link>
@@ -1436,12 +1621,12 @@ function ReportCard({
           ) : null}
           {/* Ticker grid — for multi-ticker batches */}
           {isMultiTicker ? (
-            <div className="px-4 pt-4">
-              <p className="mb-2 text-[10px] uppercase tracking-wide text-[var(--color-fg-subtle)]">
-                Select position
+            <div className="px-5 pt-1">
+              <p className="mb-2 text-xs font-medium text-[var(--color-fg-subtle)]">
+                Select a position to inspect
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                {[...escalated, ...positive, ...onTrack].map((e) => (
+              <div className="flex flex-wrap gap-2">
+                {orderedEntries.map((e) => (
                   <VerdictPill
                     key={e.ticker}
                     ticker={e.ticker}
@@ -1457,16 +1642,16 @@ function ReportCard({
 
           {/* Analyst tabs */}
           {visibleTabs.length > 0 ? (
-            <div className="px-4 pt-4">
+            <div className="px-5 pt-4">
               {/* Tab bar */}
-              <div className="relative -mx-4 overflow-x-auto">
-                <div className="flex border-b border-[var(--color-border)] px-4 overflow-x-auto">
+              <div className="relative -mx-5 overflow-x-auto">
+                <div className="flex border-b border-[var(--color-border)] px-5 overflow-x-auto">
                   {visibleTabs.map((tabType) => (
                     <button
                       key={tabType}
                       type="button"
                       onClick={() => onTabChange(tabType)}
-                      className={`mr-5 shrink-0 border-b-2 pb-2.5 pt-1 text-xs font-medium transition-colors ${
+                      className={`mr-6 shrink-0 border-b-2 pb-3 pt-1 text-sm font-medium transition-colors ${
                         activeTab === tabType
                           ? "border-[var(--color-accent-blue)] text-[var(--color-fg-default)]"
                           : "border-transparent text-[var(--color-fg-muted)]"
@@ -1479,7 +1664,7 @@ function ReportCard({
               </div>
 
               {/* Tab content */}
-              <div className="pb-5 pt-4">
+              <div className="pb-6 pt-5">
                 {detailsLoading ? (
                   <div className="flex justify-center py-8">
                     <Spinner size="md" />

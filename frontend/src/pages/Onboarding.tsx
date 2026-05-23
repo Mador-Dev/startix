@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { TickerSearch } from "../components/ui/TickerSearch";
-import { searchTicker } from "../api/search";
 import type { TickerSelection } from "../types/api";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@clerk/react";
@@ -33,25 +32,6 @@ const EXCHANGES = [
 ] as const;
 
 type Currency = "USD" | "ILA" | "GBP" | "EUR";
-
-function formatUnitPrice(amount: string, currency: Currency): string {
-  const n = Number(amount);
-  if (!amount || Number.isNaN(n)) return "—";
-  const sym =
-    currency === "ILA" ? "₪" :
-    currency === "GBP" ? "£" :
-    currency === "EUR" ? "€" : "$";
-  return `${sym}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-async function resolveMarketPrice(selection: TickerSelection): Promise<number | null> {
-  if (selection.price != null && selection.price > 0) return selection.price;
-  const { results } = await searchTicker(selection.symbol);
-  const match =
-    results.find((r) => r.symbol.toUpperCase() === selection.symbol.toUpperCase()) ??
-    results[0];
-  return match?.price != null && match.price > 0 ? match.price : null;
-}
 
 const GUIDANCE_LIMITS = {
   thesis: 400,
@@ -322,8 +302,6 @@ function PositionCard({
       assetType: "stock",
     } : null
   );
-  const [priceLoading, setPriceLoading] = useState(false);
-  const [priceError, setPriceError] = useState(false);
   const updatePos = (patch: Partial<PositionEntry>) => {
     updateAccount(accountName, (account) => ({
       ...account,
@@ -343,35 +321,11 @@ function PositionCard({
     }));
   };
 
-  const applyMarketPrice = async (val: TickerSelection) => {
-    setPriceLoading(true);
-    setPriceError(false);
-    try {
-      const price = await resolveMarketPrice(val);
-      if (price == null) {
-        setPriceError(true);
-        updatePos({ avgPrice: "" });
-        return;
-      }
-      const enriched = { ...val, price };
-      setTickerSelection(enriched);
-      updatePos({ avgPrice: String(price) });
-    } catch {
-      setPriceError(true);
-      updatePos({ avgPrice: "" });
-    } finally {
-      setPriceLoading(false);
-    }
-  };
-
   const handleTickerChange = (val: TickerSelection | null) => {
     setTickerSelection(val);
-    setPriceError(false);
     if (val) {
-      updatePos({ ticker: val.symbol, exchange: val.exchange, avgPrice: "" });
-      void applyMarketPrice(val);
+      updatePos({ ticker: val.symbol, exchange: val.exchange });
     } else {
-      setPriceLoading(false);
       updatePos({ ticker: "", exchange: "NYSE", avgPrice: "" });
     }
   };
@@ -400,31 +354,18 @@ function PositionCard({
         </div>
         <div>
           <label className={labelCls}>{t("onboardAvgPriceLabel", language)}</label>
-          <div
-            className={`${inputCls} flex items-center justify-between gap-2 min-h-[42px] ${
-              priceError ? "border-[var(--color-accent-red)]" : ""
-            }`}
-            aria-live="polite"
-          >
-            {priceLoading ? (
-              <span className="text-xs text-[var(--color-fg-muted)]">{t("onboardPriceFetching", language)}</span>
-            ) : pos.avgPrice ? (
-              <>
-                <span className="text-sm font-bold tabular-nums text-[var(--color-fg-default)]">
-                  {formatUnitPrice(pos.avgPrice, pos.currency)}
-                </span>
-                <span className="text-[10px] text-[var(--color-fg-subtle)]">{t("onboardMarketPriceHint", language)}</span>
-              </>
-            ) : (
-              <span className="text-xs text-[var(--color-fg-muted)]">—</span>
-            )}
-          </div>
-          {(priceError || errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`]) && (
-            <p className={errorCls}>
-              {priceError
-                ? t("onboardPriceUnavailable", language)
-                : errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`]}
-            </p>
+          <input
+            type="number"
+            value={pos.avgPrice}
+            onChange={(e) => updatePos({ avgPrice: e.target.value })}
+            min="0.01"
+            step="0.01"
+            placeholder="100.00"
+            className={inputCls}
+            inputMode="decimal"
+          />
+          {errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`] && (
+            <p className={errorCls}>{errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`]}</p>
           )}
         </div>
       </div>
@@ -738,7 +679,6 @@ function StepGuidance({
   onBack,
   onSkip,
   onLaunch,
-  submitting,
   launchError,
 }: {
   tickers: string[];
@@ -747,7 +687,6 @@ function StepGuidance({
   onBack: () => void;
   onSkip: () => void;
   onLaunch: () => void;
-  submitting: boolean;
   launchError: string;
 }) {
   const language = usePreferencesStore((s) => s.language);
@@ -786,15 +725,14 @@ function StepGuidance({
         <button onClick={onBack} className="flex-1 py-3 rounded-lg border border-[var(--color-border)] text-sm font-bold text-[var(--color-fg-muted)]">
           {t("back", language)}
         </button>
-        <button onClick={onSkip} disabled={submitting} className="flex-1 py-3 rounded-lg border border-[var(--color-border)] text-sm font-bold text-[var(--color-fg-muted)] disabled:opacity-50">
+        <button onClick={onSkip} className="flex-1 py-3 rounded-lg border border-[var(--color-border)] text-sm font-bold text-[var(--color-fg-muted)]">
           {t("onboardSkip", language)}
         </button>
         <button
           onClick={onLaunch}
-          disabled={submitting}
-          className="flex-1 py-3 rounded-xl border border-black/10 bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-sm font-bold shadow-[0_4px_0_rgba(17,24,39,0.12)] transition-transform hover:-translate-y-0.5 disabled:opacity-50 disabled:translate-y-0"
+          className="flex-1 py-3 rounded-xl border border-black/10 bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-sm font-bold shadow-[0_4px_0_rgba(17,24,39,0.12)] transition-transform hover:-translate-y-0.5"
         >
-          {submitting ? t("onboardLaunching", language) : t("onboardLaunchBtn", language)}
+          {t("onboardLaunchBtn", language)}
         </button>
       </div>
     </div>
@@ -821,7 +759,7 @@ export function Onboarding() {
 
   const [submittingPortfolio, setSubmittingPortfolio] = useState(false);
   const [submitError, setSubmitError] = useState("");
-  const [launchingGuidance, setLaunchingGuidance] = useState(false);
+  const launchingGuidanceRef = useRef(false);
   const [launchError, setLaunchError] = useState("");
 
   // On mount: check if backend workspace exists to determine new-user vs returning-user flow
@@ -917,7 +855,7 @@ export function Onboarding() {
   };
 
   const completeGuidanceAndLaunch = async (skip: boolean) => {
-    if (launchingGuidance) return;
+    if (launchingGuidanceRef.current) return;
 
     const guidanceError = skip ? null : validateGuidancePayload();
     if (guidanceError) {
@@ -925,7 +863,7 @@ export function Onboarding() {
       return;
     }
 
-    setLaunchingGuidance(true);
+    launchingGuidanceRef.current = true;
     setLaunchError("");
     try {
       const guidancePayload = skip ? {} : buildGuidancePayload();
@@ -958,7 +896,8 @@ export function Onboarding() {
       console.error("[Onboarding] position-guidance/complete failed:", err);
       const msg = extractErrorMessage(err);
       setLaunchError(msg);
-      setLaunchingGuidance(false);
+    } finally {
+      launchingGuidanceRef.current = false;
     }
   };
 
@@ -1142,7 +1081,6 @@ export function Onboarding() {
             onBack={() => update("step", 3)}
             onSkip={() => void completeGuidanceAndLaunch(true)}
             onLaunch={() => void completeGuidanceAndLaunch(false)}
-            submitting={launchingGuidance}
             launchError={launchError}
           />
         )}
