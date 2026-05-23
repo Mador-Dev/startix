@@ -9,6 +9,7 @@ import { logger } from "./logger.js";
 import { publishNotification } from "./notificationService.js";
 import { eventStore } from "./eventStore.js";
 import { syncStateToBaselineCoverage } from "./baselineCoverageService.js";
+import { putReportBatch } from "./reportIndexStore.js";
 
 export const DEEP_DIVE_STEPS = [
   {
@@ -128,53 +129,20 @@ async function appendDeepDiveBatch(
   strategy: StrategySnapshot
 ): Promise<void> {
   const batchId = `batch_${job.id}_deep_dive`;
-  const indexDir = path.join(ws.reportsDir, "index");
-  await fs.mkdir(indexDir, { recursive: true });
-
-  const metaPath = path.join(indexDir, "meta.json");
-  const pagePath = path.join(indexDir, "page-001.json");
-
-  let meta: {
-    totalBatches: number;
-    totalPages: number;
-    lastUpdated: string | null;
-    newestBatchId: string | null;
-    pageSize?: number;
-  } = {
-    totalBatches: 0,
-    totalPages: 1,
-    lastUpdated: null,
-    newestBatchId: null,
-    pageSize: 10,
-  };
-  try {
-    meta = JSON.parse(await fs.readFile(metaPath, "utf-8")) as typeof meta;
-  } catch {}
-
-  let page: {
-    page: number;
-    totalPages: number;
-    batches: Array<{ batchId: string } & Record<string, unknown>>;
-  } = {
-    page: 1,
-    totalPages: 1,
-    batches: [],
-  };
-  try {
-    page = JSON.parse(await fs.readFile(pagePath, "utf-8")) as typeof page;
-  } catch {}
-
-  page.batches = page.batches.filter((entry) => entry.batchId !== batchId);
-  page.batches.unshift({
+  const triggeredAt = job.completed_at ?? job.triggered_at;
+  await putReportBatch({
     batchId,
-    triggeredAt: job.completed_at ?? job.triggered_at,
-    date: (job.completed_at ?? job.triggered_at).slice(0, 10),
-    mode: "deep_dive",
-    tickers: [ticker],
-    tickerCount: 1,
+    userId: ws.userId,
     jobId: job.id,
-    entries: {
-      [ticker]: {
+    mode: "deep_dive",
+    triggeredAt,
+    date: triggeredAt.slice(0, 10),
+    summary: null,
+    highlights: null,
+    entries: [{
+      ticker,
+      dailySection: null,
+      entry: {
         ticker,
         mode: "deep_dive",
         verdict: strategy.verdict,
@@ -185,18 +153,8 @@ async function appendDeepDiveBatch(
         hasBullCase: true,
         hasBearCase: true,
       },
-    },
+    }],
   });
-  page.batches = page.batches.slice(0, meta.pageSize ?? 10);
-
-  meta.totalBatches = Math.max(meta.totalBatches, page.batches.length);
-  meta.totalPages = 1;
-  meta.lastUpdated = job.completed_at ?? job.triggered_at;
-  meta.newestBatchId = batchId;
-
-  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
-  await fs.writeFile(pagePath, JSON.stringify(page, null, 2), "utf-8");
-
   await publishNotification({
     userId: ws.userId,
     kind: "deep_dive",
@@ -687,12 +645,6 @@ export async function markDeepDiveJobFailed(
 
   await syncPendingDeepDiveState(ws, job.ticker, true);
 
-  try {
-    await fs.unlink(path.join(ws.triggersDir, `${job.id}.json`));
-  } catch {
-    // trigger may already be gone
-  }
-
   return updateJob(ws, job.id, {
     status: "failed",
     completed_at: completedAt,
@@ -727,12 +679,6 @@ export async function markDeepDiveJobCancelled(
 
   await syncPendingDeepDiveState(ws, job.ticker, true);
 
-  try {
-    await fs.unlink(path.join(ws.triggersDir, `${job.id}.json`));
-  } catch {
-    // trigger may already be gone
-  }
-
   return updateJob(ws, job.id, {
     status: "cancelled",
     completed_at: completedAt,
@@ -759,12 +705,6 @@ export async function markDeepDiveJobPaused(
   });
   await writeDeepDiveState(ws, job.ticker, state);
   await syncPendingDeepDiveState(ws, job.ticker, false);
-
-  try {
-    await fs.unlink(path.join(ws.triggersDir, `${job.id}.json`));
-  } catch {
-    // trigger may already be gone
-  }
 
   return updateJob(ws, job.id, {
     status: "paused",
@@ -814,10 +754,4 @@ export async function reconcileFailedDeepDiveJob(
   }
 
   await syncPendingDeepDiveState(ws, job.ticker, true);
-
-  try {
-    await fs.unlink(path.join(ws.triggersDir, `${job.id}.json`));
-  } catch {
-    // trigger may already be gone
-  }
 }

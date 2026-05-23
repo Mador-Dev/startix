@@ -1,4 +1,4 @@
-import { agentsApiClient } from "./agentsClient";
+import { apiClient as agentsApiClient } from "./client";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -69,7 +69,7 @@ export async function sendChatMessage(
   text: string,
   conversationId?: string
 ): Promise<SendMessageResponse> {
-  const res = await agentsApiClient.post<SendMessageResponse>("/chat/messages", {
+  const res = await agentsApiClient.post<SendMessageResponse>("/agents/chat/messages", {
     text,
     conversationId,
   });
@@ -77,14 +77,14 @@ export async function sendChatMessage(
 }
 
 export async function listSavedConversations(options: { limit?: number; offset?: number } = {}): Promise<SavedConversationListResponse> {
-  const res = await agentsApiClient.get<SavedConversationListResponse>("/chat/conversations", {
+  const res = await agentsApiClient.get<SavedConversationListResponse>("/agents/chat/conversations", {
     params: options,
   });
   return res.data;
 }
 
 export async function createSavedConversation(title?: string | null): Promise<SavedConversation> {
-  const res = await agentsApiClient.post<SavedConversationResponse>("/chat/conversations", {
+  const res = await agentsApiClient.post<SavedConversationResponse>("/agents/chat/conversations", {
     ...(title !== undefined ? { title } : {}),
   });
   return res.data.conversation;

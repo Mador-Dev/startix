@@ -1,26 +1,9 @@
-import { create } from "zustand";
-import { persist } from "zustand/middleware";
+// Auth state is now provided by Clerk via useAuth() and useUser().
+// This module re-exports a compatibility hook so call sites need minimal changes.
 
-interface AuthState {
- token: string | null;
- userId: string | null;
- isAuthenticated: boolean;
- login: (token: string, userId: string) => void;
- logout: () => void;
+import { useAuth } from "@clerk/react";
+
+export function useAuthStore<T>(selector: (s: { userId: string | null; isAuthenticated: boolean }) => T): T {
+  const { userId, isSignedIn } = useAuth();
+  return selector({ userId: userId ?? null, isAuthenticated: isSignedIn ?? false });
 }
-
-export const useAuthStore = create<AuthState>()(
- persist(
- (set) => ({
- token: null,
- userId: null,
- isAuthenticated: false,
- login: (token, userId) => set({ token, userId, isAuthenticated: true }),
- logout: () => set({ token: null, userId: null, isAuthenticated: false }),
- }),
- {
- name: "auth-storage",
- partialize: (s) => ({ token: s.token, userId: s.userId, isAuthenticated: s.isAuthenticated }),
- }
- )
-);

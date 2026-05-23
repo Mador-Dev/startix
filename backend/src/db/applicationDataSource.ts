@@ -54,9 +54,17 @@ function buildDataSource(): DataSource {
     throw new Error("APP_DATABASE_URL is required");
   }
 
+  const urlWithoutSsl = APP_DATABASE_URL
+    .replace(/[?&]sslmode=[^&]*/g, "")
+    .replace(/[?&]uselibpqcompat=[^&]*/g, "")
+    .replace(/\?&/, "?")
+    .replace(/[?&]$/, "");
+
   return new DataSource({
     type: "postgres",
-    url: APP_DATABASE_URL,
+    url: urlWithoutSsl,
+    ssl: false,
+    extra: { ssl: false },
     entities: [
       JobEntitySchema,
       ModelTierAssignmentEntitySchema,

@@ -1,10 +1,9 @@
 import axios from "axios";
 
-const getToken = (): string | null => {
+const getClerkToken = async (): Promise<string | null> => {
   try {
-    const raw = localStorage.getItem("auth-storage");
-    if (!raw) return null;
-    return JSON.parse(raw)?.state?.token ?? null;
+    // @ts-expect-error — window.Clerk injected at runtime by @clerk/react
+    return (await window.Clerk?.session?.getToken()) ?? null;
   } catch {
     return null;
   }
@@ -19,8 +18,8 @@ export const agentsApiClient = axios.create({
   timeout: 30000,
 });
 
-agentsApiClient.interceptors.request.use((config) => {
-  const token = getToken();
+agentsApiClient.interceptors.request.use(async (config) => {
+  const token = await getClerkToken();
   if (token) {
     config.headers = config.headers ?? {};
     config.headers["Authorization"] = `Bearer ${token}`;
@@ -31,10 +30,8 @@ agentsApiClient.interceptors.request.use((config) => {
 agentsApiClient.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
-      localStorage.removeItem("auth-storage");
-      window.location.href = "/login";
-    }
+    // Don't redirect to /login on 401 from the agents service — it may not use Clerk auth.
+    // Let callers handle the error gracefully.
     return Promise.reject(err);
   }
 );

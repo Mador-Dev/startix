@@ -1,5 +1,3 @@
-import { promises as fs } from "fs";
-import path from "path";
 import type { UserWorkspace } from "../middleware/userIsolation.js";
 import type { Job, JsonValue } from "../types/index.js";
 import { PortfolioFileSchema } from "../schemas/portfolio.js";
@@ -14,6 +12,7 @@ import { loadUserStrategy } from "./strategyAccess.js";
 import { ensurePointsBudgetAvailable } from "./pointsBudgetService.js";
 import { requiresBudgetAdmission } from "./jobAdmissionService.js";
 import { admitOrReuseStepQueueJob } from "./stepQueue/admission.js";
+import { putReportBatch } from "./reportIndexStore.js";
 
 export type DailyBriefTruthState =
   | "calm_trusted"
@@ -479,51 +478,74 @@ async function appendDailyBriefBatch(
   result: DailyBriefResult
 ): Promise<void> {
   const batchId = `batch_${job.id}_daily_brief`;
-  const indexDir = path.join(ws.reportsDir, "index");
-  await fs.mkdir(indexDir, { recursive: true });
-
-  const metaPath = path.join(indexDir, "meta.json");
-  let meta: {
-    totalBatches: number;
-    totalPages: number;
-    lastUpdated: string | null;
-    newestBatchId: string | null;
-    pageSize?: number;
-  } = {
-    totalBatches: 0,
-    totalPages: 1,
-    lastUpdated: null,
-    newestBatchId: null,
-    pageSize: 10,
-  };
-  try {
-    meta = JSON.parse(await fs.readFile(metaPath, "utf-8")) as typeof meta;
-  } catch {}
-
-  const pagePath = path.join(indexDir, "page-001.json");
-  let page: {
-    page: number;
-    totalPages: number;
-    batches: Array<{ batchId: string } & Record<string, unknown>>;
-  } = {
-    page: 1,
-    totalPages: 1,
-    batches: [],
-  };
-  try {
-    page = JSON.parse(await fs.readFile(pagePath, "utf-8")) as typeof page;
-  } catch {}
-
-  page.batches = page.batches.filter((entry) => entry.batchId !== batchId);
   const dashboardPath = `/reports?batch=${encodeURIComponent(batchId)}`;
-  page.batches.unshift({
+
+  const portfolioEntries = result.tickers.map((item) => [
+    item.ticker,
+    {
+      ticker: item.ticker,
+      mode: "daily_brief",
+      dailySection: "portfolio",
+      verdict: item.verdict,
+      confidence: item.confidence,
+      reasoning: item.escalationReason ?? "On track",
+      timeframe: "immediate",
+      analystTypes: ["quick_check"],
+      hasBullCase: false,
+      hasBearCase: false,
+      currentILS: item.currentILS,
+      dayChangePct: item.dayChangePct,
+      moveReason: item.moveReason,
+      needsEscalation: item.needsEscalation,
+      escalationReason: item.escalationReason,
+      deepDiveQueued: item.deepDiveQueued ?? false,
+      deepDiveJobId: item.deepDiveJobId ?? null,
+      deepDiveQueueStatus: item.deepDiveQueueStatus ?? "not_needed",
+      deepDiveQueueReason: item.deepDiveQueueReason ?? null,
+    },
+  ] as const);
+
+  const trackingEntries = result.tracking.tickers.map((item) => [
+    item.ticker,
+    {
+      ticker: item.ticker,
+      mode: "daily_brief",
+      dailySection: "tracking",
+      verdict: item.verdict,
+      confidence: item.confidence,
+      reasoning: item.reviewReason ?? item.reasoning,
+      timeframe: "watch",
+      analystTypes: ["tracking"],
+      hasBullCase: false,
+      hasBearCase: false,
+      needsEscalation: item.needsReview,
+      escalationReason: item.reviewReason,
+      deepDiveQueued: item.deepDiveQueued,
+      deepDiveJobId: item.deepDiveJobId,
+      deepDiveQueueStatus: item.deepDiveQueueStatus,
+      deepDiveQueueReason: item.deepDiveQueueReason,
+      assetScope: "tracking",
+      trackingStatus: "active",
+      stance: item.stance,
+      potentialScore: item.potentialScore,
+      urgencyScore: item.urgencyScore,
+      urgencyLabel: item.urgencyLabel,
+      portfolioFitScore: item.portfolioFitScore,
+      suggestedAllocationPct: item.suggestedAllocationPct,
+      suggestedAllocationILS: item.suggestedAllocationILS,
+    },
+  ] as const);
+
+  const allEntries = Object.fromEntries([...portfolioEntries, ...trackingEntries]);
+  const allTickers = [...result.tickers.map((t) => t.ticker), ...result.tracking.tickers.map((t) => t.ticker)];
+
+  await putReportBatch({
     batchId,
+    userId: ws.userId,
+    jobId: job.id,
+    mode: "daily_brief",
     triggeredAt: result.generatedAt,
     date: result.generatedAt.slice(0, 10),
-    mode: "daily_brief",
-    tickers: result.tickers.map((item) => item.ticker),
-    tickerCount: result.tickers.length,
-    jobId: job.id,
     summary: {
       truthState: result.summary.truthState,
       headline: result.summary.headline,
@@ -533,75 +555,13 @@ async function appendDailyBriefBatch(
       securityNote: result.summary.securityNote,
       dashboardPath,
     },
-    highlights: result.highlights,
-    entries: Object.fromEntries(
-      [
-        ...result.tickers.map((item) => [
-          item.ticker,
-          {
-            ticker: item.ticker,
-            mode: "daily_brief",
-            dailySection: "portfolio",
-            verdict: item.verdict,
-            confidence: item.confidence,
-            reasoning: item.escalationReason ?? "On track",
-            timeframe: "immediate",
-            analystTypes: ["quick_check"],
-            hasBullCase: false,
-            hasBearCase: false,
-            currentILS: item.currentILS,
-            dayChangePct: item.dayChangePct,
-            moveReason: item.moveReason,
-            needsEscalation: item.needsEscalation,
-            escalationReason: item.escalationReason,
-            deepDiveQueued: item.deepDiveQueued ?? false,
-            deepDiveJobId: item.deepDiveJobId ?? null,
-            deepDiveQueueStatus: item.deepDiveQueueStatus ?? "not_needed",
-            deepDiveQueueReason: item.deepDiveQueueReason ?? null,
-          },
-        ] as const),
-        ...result.tracking.tickers.map((item) => [
-          item.ticker,
-          {
-            ticker: item.ticker,
-            mode: "daily_brief",
-            dailySection: "tracking",
-            verdict: item.verdict,
-            confidence: item.confidence,
-            reasoning: item.reviewReason ?? item.reasoning,
-            timeframe: "watch",
-            analystTypes: ["tracking"],
-            hasBullCase: false,
-            hasBearCase: false,
-            needsEscalation: item.needsReview,
-            escalationReason: item.reviewReason,
-            deepDiveQueued: item.deepDiveQueued,
-            deepDiveJobId: item.deepDiveJobId,
-            deepDiveQueueStatus: item.deepDiveQueueStatus,
-            deepDiveQueueReason: item.deepDiveQueueReason,
-            assetScope: "tracking",
-            trackingStatus: "active",
-            stance: item.stance,
-            potentialScore: item.potentialScore,
-            urgencyScore: item.urgencyScore,
-            urgencyLabel: item.urgencyLabel,
-            portfolioFitScore: item.portfolioFitScore,
-            suggestedAllocationPct: item.suggestedAllocationPct,
-            suggestedAllocationILS: item.suggestedAllocationILS,
-          },
-        ] as const),
-      ]
-    ),
+    highlights: result.highlights as unknown as Record<string, unknown>,
+    entries: allTickers.map((ticker) => ({
+      ticker,
+      dailySection: (allEntries[ticker] as { dailySection?: string } | undefined)?.dailySection ?? null,
+      entry: allEntries[ticker] as Record<string, unknown>,
+    })),
   });
-  page.batches = page.batches.slice(0, meta.pageSize ?? 10);
-
-  meta.totalBatches = Math.max(meta.totalBatches, page.batches.length);
-  meta.totalPages = 1;
-  meta.lastUpdated = result.generatedAt;
-  meta.newestBatchId = batchId;
-
-  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
-  await fs.writeFile(pagePath, JSON.stringify(page, null, 2), "utf-8");
 
   const escalatedTickers = result.tickers
     .filter((item) => item.needsEscalation)
@@ -615,7 +575,7 @@ async function appendDailyBriefBatch(
     summary: escalatedTickers.length > 0 ? result.summary.today : result.summary.securityNote,
     ticker: result.tickers[0]?.ticker ?? null,
     batchId,
-    actionUrl: `/reports?batch=${encodeURIComponent(batchId)}`,
+    actionUrl: dashboardPath,
   });
 }
 

@@ -117,7 +117,7 @@ function AccountManagerModal({
                       setSaving(false);
                     }
                   }}
-                  className="px-4 py-2.5 rounded-xl bg-[var(--color-accent-blue)] text-white text-sm font-bold disabled:opacity-50"
+                  className="px-4 py-2.5 rounded-xl bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-sm font-bold disabled:opacity-50"
                 >
                   {saving ? "Adding..." : "Add"}
                 </button>

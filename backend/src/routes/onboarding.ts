@@ -21,11 +21,13 @@ import { writeUserAuth } from "../services/userStore.js";
 import { readPortfolio } from "../services/portfolioStore.js";
 import {
   createUserWorkspace,
+  ensureUserProvisioned,
   workspaceExists,
   saveUserPortfolio,
   startUserBootstrap,
 } from "../services/workspaceService.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { ensureUserProvisionedMiddleware } from "../middleware/ensureUserProvisioned.js";
 import { userIsolationMiddleware } from "../middleware/userIsolation.js";
 import { readOnlyGuard } from "../middleware/impersonation.js";
 import { getNotificationPreferences, setNotificationPreferences } from "../services/notificationService.js";
@@ -42,7 +44,12 @@ const router = Router();
 
 // Applied to every authenticated onboarding route (all except POST /init which uses X-Admin-Key).
 // Ordering matters: auth sets userId, isolation builds workspace, readOnlyGuard blocks impersonation writes.
-const authGuard = [authMiddleware, userIsolationMiddleware, readOnlyGuard] as const;
+const authGuard = [
+  authMiddleware,
+  ensureUserProvisionedMiddleware,
+  userIsolationMiddleware,
+  readOnlyGuard,
+] as const;
 
 type AsyncHandler = (
   req: AuthenticatedRequest,
@@ -79,7 +86,7 @@ router.post(
       return;
     }
 
-    const { userId, password, displayName, telegramChatId, schedule } =
+    const { userId, password, displayName, schedule } =
       parsed.data;
 
     // Check workspace doesn't exist
@@ -89,16 +96,19 @@ router.post(
     }
 
     // Create workspace
-    const ws = await createUserWorkspace(userId);
+    await createUserWorkspace(userId);
 
-    const hash = await hashPassword(password);
-    await writeUserAuth(userId, { passwordHash: hash, tokenVersion: 0 });
     const { ensureUserRecord } = await import("../services/userStore.js");
-    await ensureUserRecord(userId, {
+    const userRecord: Record<string, unknown> = {
       displayName,
-      passwordHash: hash,
       schedule: schedule as Record<string, unknown>,
-    });
+    };
+    if (password) {
+      const hash = await hashPassword(password);
+      await writeUserAuth(userId, { passwordHash: hash, tokenVersion: 0 });
+      userRecord.passwordHash = hash;
+    }
+    await ensureUserRecord(userId, userRecord);
 
     const { readPersonaMd, writePersonaMd } = await import("../services/personaStore.js");
     const userMdRaw = (await readPersonaMd(userId)) ?? "";
@@ -107,6 +117,29 @@ router.post(
     res.status(201).json({
       userId,
       created: true,
+      nextStep: "submit_portfolio",
+    });
+  })
+);
+
+// ── POST /api/onboard/provision ─────────────────────────────────────────────
+// Clerk-authenticated users: create DB workspace without admin key.
+
+router.post(
+  "/provision",
+  authMiddleware,
+  ensureUserProvisionedMiddleware,
+  handler(async (req: AuthenticatedRequest, res: Response) => {
+    const userId = res.locals["userId"] as string;
+    const displayName =
+      typeof req.body?.displayName === "string" && req.body.displayName.trim().length > 0
+        ? req.body.displayName.trim().slice(0, 64)
+        : undefined;
+
+    const result = await ensureUserProvisioned(userId, { displayName });
+    res.status(result.created ? 201 : 200).json({
+      userId,
+      created: result.created,
       nextStep: "submit_portfolio",
     });
   })
@@ -244,7 +277,7 @@ router.post(
     res.status(200).json({
       state: "BOOTSTRAPPING",
       guidanceStepPending: false,
-      message: "Account launched. Trigger a full_report job on the agents service to begin analysis.",
+      message: "Account launched. Start the bootstrap job on the agents service to begin analysis.",
     });
   })
 );

@@ -1,20 +1,20 @@
-import { agentsApiClient } from "./agentsClient";
+import { apiClient } from "./client";
 import type { Job, JobsResponse, TriggerResponse, JobAction } from "../types/api";
 
 export const fetchJobs = async (): Promise<JobsResponse> =>
- (await agentsApiClient.get<JobsResponse>("/jobs")).data;
+  (await apiClient.get<JobsResponse>("/agents/jobs")).data;
 
 export const fetchJob = async (jobId: string): Promise<Job> =>
- (await agentsApiClient.get<Job>(`/jobs/${jobId}`)).data;
+  (await apiClient.get<Job>(`/agents/jobs/${jobId}`)).data;
 
 export const triggerJob = async (
- action: JobAction,
- ticker?: string
+  action: JobAction,
+  ticker?: string
 ): Promise<TriggerResponse> =>
- (await agentsApiClient.post<TriggerResponse>("/jobs/trigger", { action, ticker })).data;
+  (await apiClient.post<TriggerResponse>("/agents/jobs/trigger", { action, ticker })).data;
 
 export const cancelJob = async (jobId: string): Promise<{ cancelled: true; job: Job }> =>
- (await agentsApiClient.delete<{ cancelled: true; job: Job }>(`/jobs/${jobId}`)).data;
+  (await apiClient.delete<{ cancelled: true; job: Job }>(`/agents/jobs/${jobId}`)).data;
 
 export const resumeJob = async (jobId: string): Promise<{ resumed: true; job: Job }> =>
- (await agentsApiClient.post<{ resumed: true; job: Job }>(`/jobs/${jobId}/resume`)).data;
+  (await apiClient.post<{ resumed: true; job: Job }>(`/agents/jobs/${jobId}/resume`)).data;

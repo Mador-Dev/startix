@@ -28,6 +28,7 @@ function computeSignalSetFingerprint(signals: string[]): string {
 import { ensurePointsBudgetAvailable } from "./pointsBudgetService.js";
 import { requiresBudgetAdmission } from "./jobAdmissionService.js";
 import { admitOrReuseStepQueueJob } from "./stepQueue/admission.js";
+import { putReportBatch } from "./reportIndexStore.js";
 
 interface SentimentSnapshot {
   narrativeShift?: string;
@@ -129,52 +130,19 @@ async function appendQuickCheckBatch(
   result: QuickCheckOutcome
 ): Promise<void> {
   const batchId = `batch_${job.id}_quick_check`;
-  const indexDir = path.join(ws.reportsDir, "index");
-  await fs.mkdir(indexDir, { recursive: true });
-
-  const metaPath = path.join(indexDir, "meta.json");
-  let meta: {
-    totalBatches: number;
-    totalPages: number;
-    lastUpdated: string | null;
-    newestBatchId: string | null;
-    pageSize?: number;
-  } = {
-    totalBatches: 0,
-    totalPages: 1,
-    lastUpdated: null,
-    newestBatchId: null,
-    pageSize: 10,
-  };
-  try {
-    meta = JSON.parse(await fs.readFile(metaPath, "utf-8")) as typeof meta;
-  } catch {}
-
-  const pagePath = path.join(indexDir, "page-001.json");
-  let page: {
-    page: number;
-    totalPages: number;
-    batches: Array<{ batchId: string } & Record<string, unknown>>;
-  } = {
-    page: 1,
-    totalPages: 1,
-    batches: [],
-  };
-  try {
-    page = JSON.parse(await fs.readFile(pagePath, "utf-8")) as typeof page;
-  } catch {}
-
-  page.batches = page.batches.filter((entry) => entry.batchId !== batchId);
-  page.batches.unshift({
+  await putReportBatch({
     batchId,
+    userId: ws.userId,
+    jobId: job.id,
+    mode: "quick_check",
     triggeredAt: result.timestamp,
     date: result.timestamp.slice(0, 10),
-    mode: "quick_check",
-    tickers: [result.ticker],
-    tickerCount: 1,
-    jobId: job.id,
-    entries: {
-      [result.ticker]: {
+    summary: null,
+    highlights: null,
+    entries: [{
+      ticker: result.ticker,
+      dailySection: null,
+      entry: {
         ticker: result.ticker,
         mode: "quick_check",
         verdict: result.needs_escalation ? "REDUCE" : "HOLD",
@@ -185,18 +153,8 @@ async function appendQuickCheckBatch(
         hasBullCase: false,
         hasBearCase: false,
       },
-    },
+    }],
   });
-  page.batches = page.batches.slice(0, meta.pageSize ?? 10);
-
-  meta.totalBatches = Math.max(meta.totalBatches, page.batches.length);
-  meta.totalPages = 1;
-  meta.lastUpdated = result.timestamp;
-  meta.newestBatchId = batchId;
-
-  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
-  await fs.writeFile(pagePath, JSON.stringify(page, null, 2), "utf-8");
-
   await publishNotification({
     userId: ws.userId,
     kind: "quick_check",

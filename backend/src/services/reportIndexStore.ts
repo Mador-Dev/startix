@@ -199,3 +199,177 @@ export async function listReportIndex(batchId: string): Promise<ReportIndexRecor
   )) as IndexRow[];
   return rows.map(indexFromRow);
 }
+
+export interface BatchWithEntries {
+  batchId: string;
+  jobId: string;
+  mode: string;
+  triggeredAt: string;
+  date: string;
+  tickerCount: number;
+  summary: Record<string, unknown> | null;
+  highlights: Record<string, unknown> | null;
+  tickers: string[];
+  entries: Record<string, Record<string, unknown>>;
+}
+
+export async function listBatchesWithEntries(
+  userId: string,
+  limit = 100
+): Promise<BatchWithEntries[]> {
+  if (!isApplicationDatabaseConfigured()) return [];
+  const ds = await getApplicationDataSource();
+
+  interface JoinRow {
+    batch_id: string;
+    job_id: string;
+    mode: string;
+    triggered_at: Date | string;
+    date: Date | string;
+    ticker_count: number;
+    summary: Record<string, unknown> | null;
+    highlights: Record<string, unknown> | null;
+    ticker: string | null;
+    daily_section: string | null;
+    entry: Record<string, unknown> | null;
+  }
+
+  const rows = (await ds.query(
+    `SELECT rb.batch_id, rb.job_id, rb.mode, rb.triggered_at, rb.date,
+            rb.ticker_count, rb.summary, rb.highlights,
+            ri.ticker, ri.daily_section, ri.entry
+       FROM (
+         SELECT * FROM report_batches WHERE user_id = $1
+         ORDER BY triggered_at DESC LIMIT $2
+       ) rb
+       LEFT JOIN report_index ri ON ri.batch_id = rb.batch_id
+       ORDER BY rb.triggered_at DESC, rb.batch_id, ri.ticker`,
+    [userId, limit]
+  )) as JoinRow[];
+
+  const batchMap = new Map<string, BatchWithEntries>();
+  for (const row of rows) {
+    if (!batchMap.has(row.batch_id)) {
+      batchMap.set(row.batch_id, {
+        batchId: row.batch_id,
+        jobId: row.job_id,
+        mode: row.mode,
+        triggeredAt: toIso(row.triggered_at),
+        date: toDateString(row.date),
+        tickerCount: row.ticker_count,
+        summary: row.summary,
+        highlights: row.highlights,
+        tickers: [],
+        entries: {},
+      });
+    }
+    if (row.ticker && row.entry) {
+      const b = batchMap.get(row.batch_id)!;
+      b.tickers.push(row.ticker);
+      b.entries[row.ticker] = row.entry;
+    }
+  }
+
+  return [...batchMap.values()];
+}
+
+export async function getReportMeta(userId: string): Promise<{
+  totalBatches: number;
+  totalPages: number;
+  lastUpdated: string | null;
+  newestBatchId: string | null;
+}> {
+  if (!isApplicationDatabaseConfigured()) {
+    return { totalBatches: 0, totalPages: 0, lastUpdated: null, newestBatchId: null };
+  }
+  const ds = await getApplicationDataSource();
+  const countRows = (await ds.query(
+    `SELECT COUNT(*) AS total FROM report_batches WHERE user_id = $1`,
+    [userId]
+  )) as Array<{ total: string }>;
+  const latestRows = (await ds.query(
+    `SELECT batch_id, triggered_at FROM report_batches WHERE user_id = $1
+       ORDER BY triggered_at DESC LIMIT 1`,
+    [userId]
+  )) as Array<{ batch_id: string; triggered_at: Date | string }>;
+
+  const totalBatches = parseInt(countRows[0]?.total ?? "0", 10);
+  const PAGE_SIZE = 10;
+  return {
+    totalBatches,
+    totalPages: Math.max(1, Math.ceil(totalBatches / PAGE_SIZE)),
+    lastUpdated: latestRows[0] ? toIso(latestRows[0].triggered_at) : null,
+    newestBatchId: latestRows[0]?.batch_id ?? null,
+  };
+}
+
+export async function listBatchesPage(
+  userId: string,
+  pageNum: number,
+  pageSize = 10
+): Promise<{ page: number; totalPages: number; batches: BatchWithEntries[] }> {
+  if (!isApplicationDatabaseConfigured()) {
+    return { page: pageNum, totalPages: 1, batches: [] };
+  }
+  const ds = await getApplicationDataSource();
+  const countRows = (await ds.query(
+    `SELECT COUNT(*) AS total FROM report_batches WHERE user_id = $1`,
+    [userId]
+  )) as Array<{ total: string }>;
+  const total = parseInt(countRows[0]?.total ?? "0", 10);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(pageNum, 1), totalPages);
+  const offset = (safePage - 1) * pageSize;
+
+  interface JoinRow {
+    batch_id: string;
+    job_id: string;
+    mode: string;
+    triggered_at: Date | string;
+    date: Date | string;
+    ticker_count: number;
+    summary: Record<string, unknown> | null;
+    highlights: Record<string, unknown> | null;
+    ticker: string | null;
+    daily_section: string | null;
+    entry: Record<string, unknown> | null;
+  }
+
+  const rows = (await ds.query(
+    `SELECT rb.batch_id, rb.job_id, rb.mode, rb.triggered_at, rb.date,
+            rb.ticker_count, rb.summary, rb.highlights,
+            ri.ticker, ri.daily_section, ri.entry
+       FROM (
+         SELECT * FROM report_batches WHERE user_id = $1
+         ORDER BY triggered_at DESC LIMIT $2 OFFSET $3
+       ) rb
+       LEFT JOIN report_index ri ON ri.batch_id = rb.batch_id
+       ORDER BY rb.triggered_at DESC, rb.batch_id, ri.ticker`,
+    [userId, pageSize, offset]
+  )) as JoinRow[];
+
+  const batchMap = new Map<string, BatchWithEntries>();
+  for (const row of rows) {
+    if (!batchMap.has(row.batch_id)) {
+      batchMap.set(row.batch_id, {
+        batchId: row.batch_id,
+        jobId: row.job_id,
+        mode: row.mode,
+        triggeredAt: toIso(row.triggered_at),
+        date: toDateString(row.date),
+        tickerCount: row.ticker_count,
+        summary: row.summary,
+        highlights: row.highlights,
+        tickers: [],
+        entries: {},
+      });
+    }
+    if (row.ticker && row.entry) {
+      const b = batchMap.get(row.batch_id)!;
+      b.tickers.push(row.ticker);
+      b.entries[row.ticker] = row.entry;
+    }
+  }
+
+  return { page: safePage, totalPages, batches: [...batchMap.values()] };
+}

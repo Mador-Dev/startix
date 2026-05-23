@@ -1,8 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import path from "path";
 import { resolveConfiguredPath } from "../services/paths.js";
-import { readUserAuth } from "../services/userStore.js";
-import { isApplicationDatabaseConfigured } from "../db/applicationDataSource.js";
 
 export class WorkspaceViolationError extends Error {
   constructor(
@@ -83,14 +81,6 @@ export async function userIsolationMiddleware(
   if (!userId) {
     res.status(401).json({ error: "unauthorized" });
     return;
-  }
-
-  if (isApplicationDatabaseConfigured()) {
-    const auth = await readUserAuth(userId);
-    if (!auth?.passwordHash) {
-      res.status(404).json({ error: "user not found" });
-      return;
-    }
   }
 
   const usersDir = resolveConfiguredPath(process.env["USERS_DIR"], "../users");

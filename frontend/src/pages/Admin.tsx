@@ -93,7 +93,7 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
             className="w-full bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-lg px-4 py-3 text-sm text-[var(--color-fg-default)] outline-none focus:border-[var(--color-accent-blue)]"
           />
           {error && <p className="text-[var(--color-accent-red)] text-sm text-center">{error}</p>}
-          <button type="submit" className="w-full py-3 rounded-lg bg-[var(--color-accent-blue)] text-white font-bold text-sm">
+          <button type="submit" className="w-full py-3 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] font-bold text-sm">
             {t("adminSignIn", language)}
           </button>
         </form>
@@ -159,7 +159,7 @@ function PointsBudgetEditor({
         <button
           onClick={handleSave}
           disabled={!validBudget || saving}
-          className="flex-1 py-2 rounded-lg bg-[var(--color-accent-blue)] text-white text-xs font-bold disabled:opacity-50"
+          className="flex-1 py-2 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-xs font-bold disabled:opacity-50"
         >
           {saving ? "Saving..." : "Save"}
         </button>
@@ -296,7 +296,7 @@ function AddUserModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
               {t("cancel", language)}
             </button>
             <button type="submit" disabled={loading}
-              className="flex-1 py-2.5 rounded-lg bg-[var(--color-accent-blue)] text-white text-sm font-bold disabled:opacity-50">
+              className="flex-1 py-2.5 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-sm font-bold disabled:opacity-50">
               {loading ? t("adminCreating", language) : t("adminCreateUser", language)}
             </button>
           </div>

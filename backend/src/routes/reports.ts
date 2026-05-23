@@ -4,7 +4,8 @@ import { readWorkspaceJson } from "../services/workspaceDataIO.js";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
 import type { UserWorkspace } from "../middleware/userIsolation.js";
 import { guardPath } from "../middleware/userIsolation.js";
-import { readFeedPage, type StoredBatch } from "../services/feedService.js";
+import { readFeedPage } from "../services/feedService.js";
+import { getReportMeta, listBatchesPage } from "../services/reportIndexStore.js";
 import { loadUserStrategy } from "../services/strategyAccess.js";
 
 const router = Router();
@@ -38,52 +39,11 @@ const VALID_REPORT_TYPES = [
 const BATCH_ID_REGEX = /^[a-zA-Z0-9_]{1,60}$/;
 const TICKER_REGEX = /^[A-Z0-9.]{1,12}$/;
 
-async function readCurrentMeta(ws: UserWorkspace): Promise<{
-  totalBatches: number;
-  totalPages: number;
-  lastUpdated: string | null;
-  newestBatchId: string | null;
-}> {
-  const metaPath = path.join(ws.reportsDir, "index", "meta.json");
-  const parsed = await readWorkspaceJson(ws.userId, metaPath);
-  if (parsed && typeof parsed === "object") {
-    return parsed as {
-      totalBatches: number;
-      totalPages: number;
-      lastUpdated: string | null;
-      newestBatchId: string | null;
-    };
-  }
-  return {
-      totalBatches: 0,
-      totalPages: 0,
-      lastUpdated: null,
-      newestBatchId: null,
-    };
-}
-
-async function readCurrentPage(ws: UserWorkspace, pageNum: number): Promise<{
-  page: number;
-  totalPages: number;
-  batches: StoredBatch[];
-} | null> {
-  const pagePath = path.join(ws.reportsDir, "index", `page-${String(pageNum).padStart(3, "0")}.json`);
-  const parsed = await readWorkspaceJson(ws.userId, pagePath);
-  if (parsed && typeof parsed === "object") {
-    return parsed as {
-      page: number;
-      totalPages: number;
-      batches: StoredBatch[];
-    };
-  }
-  return null;
-}
-
 router.get(
   "/reports/meta",
   handler(async (_req: AuthenticatedRequest, res: Response) => {
     const ws = res.locals["workspace"] as UserWorkspace;
-    res.json(await readCurrentMeta(ws));
+    res.json(await getReportMeta(ws.userId));
   })
 );
 
@@ -96,20 +56,16 @@ router.get(
       res.status(400).json({ error: "pageNum must be positive integer" });
       return;
     }
-    
-    const page = await readCurrentPage(ws, pageNum);
-    if (!page) {
-      res.status(404).json({ error: "Page not found" });
-      return;
-    }
 
+    const page = await listBatchesPage(ws.userId, pageNum);
     res.json({
-      ...page,
+      page: page.page,
+      totalPages: page.totalPages,
       batches: page.batches.map((batch) => ({
         ...batch,
         tickers: batch.tickers.map((ticker: string) => ({
           ticker,
-          verdict: batch.entries?.[ticker]?.verdict ?? "HOLD",
+          verdict: (batch.entries[ticker]?.["verdict"] as string | undefined) ?? "HOLD",
         })),
       })),
     });
@@ -128,17 +84,7 @@ router.get(
       return;
     }
 
-    const page = await readFeedPage(
-      ws,
-      {
-        pageNum,
-        mode,
-        search,
-      },
-      readCurrentMeta,
-      readCurrentPage
-    );
-    res.json(page);
+    res.json(await readFeedPage(ws.userId, { pageNum, mode, search }));
   })
 );
 

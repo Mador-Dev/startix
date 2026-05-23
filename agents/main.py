@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import jwt
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from agents.app.chat_service import ChatService
-from agents.app.config import get_settings
 from agents.app.jobs_service import JobsService
 from agents.app.schemas import (
     BootstrapJobResult,
@@ -23,6 +20,7 @@ from agents.app.schemas import (
     TriggerJobRequest,
     TriggerResponse,
 )
+from agents.app import store as agent_store
 from agents.app.service import BootstrapService
 
 
@@ -31,9 +29,9 @@ jobs_service = JobsService()
 chat_service = ChatService(jobs_service)
 
 app = FastAPI(
-    title="Agents Service",
+    title="Startix Agents",
     version="0.2.0",
-    description="Direct-client bootstrap, jobs, and chat orchestration service.",
+    description="Agentic strategy engine — bootstrap, analysis jobs, and AI chat advisor.",
 )
 
 app.add_middleware(
@@ -44,25 +42,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_bearer = HTTPBearer()
-
-
-def require_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> str:
-    """Validate the JWT Bearer token and return the userId claim."""
-    settings = get_settings()
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.jwt_secret,
-            algorithms=["HS256"],
-            options={"verify_exp": False},  # backend issues 7d tokens; exp check is optional
-        )
-        user_id: str | None = payload.get("userId")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token: missing userId")
-        return user_id
-    except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+def require_user(x_user_id: str | None = Header(default=None)) -> str:
+    """Read the verified userId forwarded by the Express proxy."""
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-Id header")
+    return x_user_id
 
 
 @app.get("/health")
@@ -119,11 +103,7 @@ async def list_bootstrap_strategies(
 ) -> dict:
     if jwt_user != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
-    ws = bootstrap_service.store.workspace(user_id)
-    strategies = []
-    for strategy_path in ws.tickers_dir.glob("*/strategy.json"):
-        strategies.append(bootstrap_service.store.read_json(strategy_path, default={}))
-    return {"userId": user_id, "strategies": strategies}
+    return {"userId": user_id, "strategies": agent_store.list_strategies(user_id)}
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────

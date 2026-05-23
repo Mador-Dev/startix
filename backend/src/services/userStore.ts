@@ -291,8 +291,13 @@ export async function listUserIds(): Promise<string[]> {
 }
 
 export async function userExists(userId: string): Promise<boolean> {
-  const auth = await readUserAuth(userId);
-  return Boolean(auth?.passwordHash);
+  requireDatabase();
+  const ds = await getApplicationDataSource();
+  const rows = (await ds.query(
+    `SELECT 1 FROM users WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  )) as unknown[];
+  return rows.length > 0;
 }
 
 export async function getUserOnboardingProfile(userId: string): Promise<{

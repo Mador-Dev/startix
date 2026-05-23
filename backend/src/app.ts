@@ -7,11 +7,15 @@ import express, {
 import helmet from "helmet";
 import cors from "cors";
 import path from "path";
+import { createProxyMiddleware } from "http-proxy-middleware";
+import { clerkMiddleware } from "@clerk/express";
 import { logger } from "./services/logger.js";
 import { ZodError } from "zod";
 import { WorkspaceViolationError } from "./middleware/userIsolation.js";
+import { WorkspaceNotFoundError } from "./services/workspaceService.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { authMiddleware } from "./middleware/auth.js";
+import { ensureUserProvisionedMiddleware } from "./middleware/ensureUserProvisioned.js";
 import { userIsolationMiddleware } from "./middleware/userIsolation.js";
 import { readOnlyGuard } from "./middleware/impersonation.js";
 import authRoutes from "./routes/auth.js";
@@ -42,6 +46,7 @@ export function createApp(): Express {
   }));
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
+  app.use(clerkMiddleware());
 
   // Health — no auth
   app.get("/api/health", (_req: Request, res: Response) => {
@@ -69,8 +74,33 @@ export function createApp(): Express {
   app.use("/api", telegramRoutes); // POST /api/telegram/webhook — public webhook path
   app.use("/api", whatsappRoutes); // GET/POST /api/whatsapp/webhook — public webhook path
 
+  // Agents proxy — auth-verified, forwards X-User-Id to the internal agents service
+  const agentsTarget = process.env["AGENTS_INTERNAL_URL"] ?? "http://localhost:8090";
+  app.use(
+    "/api/agents",
+    authMiddleware,
+    ensureUserProvisionedMiddleware,
+    createProxyMiddleware({
+      target: agentsTarget,
+      changeOrigin: true,
+      pathRewrite: { "^/api/agents": "/api" },
+      on: {
+        proxyReq(proxyReq, _req, res) {
+          const userId = res.locals["userId"] as string | undefined;
+          if (userId) proxyReq.setHeader("x-user-id", userId);
+        },
+      },
+    })
+  );
+
   // Protected routes — JWT + user isolation for everything else
-  app.use("/api", authMiddleware, userIsolationMiddleware, readOnlyGuard);
+  app.use(
+    "/api",
+    authMiddleware,
+    ensureUserProvisionedMiddleware,
+    userIsolationMiddleware,
+    readOnlyGuard
+  );
 
   // Route mounts
   app.use("/api/me", controlRoutes); // GET /api/me/control
@@ -115,6 +145,11 @@ export function createApp(): Express {
           `Workspace violation: user=${err.userId} path=${err.attemptedPath}`
         );
         res.status(403).json({ error: "access denied" });
+        return;
+      }
+
+      if (err instanceof WorkspaceNotFoundError) {
+        res.status(404).json({ error: "user workspace not found" });
         return;
       }
 

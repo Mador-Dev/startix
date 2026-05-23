@@ -194,3 +194,19 @@ export async function markRead(userId: string, ids: string[]): Promise<number> {
   );
   return unwrapMutationRows<{ id: string }>(raw).length;
 }
+
+export async function listByBatch(
+  userId: string,
+  batchId: string,
+  category: NotificationCategory
+): Promise<NotificationRecord[]> {
+  if (!isApplicationDatabaseConfigured()) return [];
+  const ds = await getApplicationDataSource();
+  const rows = (await ds.query(
+    `SELECT ${SELECT_COLUMNS} FROM notifications_outbox
+      WHERE user_id = $1 AND batch_id = $2 AND category = $3
+      ORDER BY created_at DESC`,
+    [userId, batchId, category]
+  )) as Row[];
+  return rows.map(fromRow);
+}

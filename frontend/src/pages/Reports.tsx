@@ -373,7 +373,7 @@ function ActiveJobCard({
               type="button"
               onClick={() => onResume(job)}
               disabled={busy}
-              className="rounded-md bg-[var(--color-accent-blue)] px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
+              className="rounded-md bg-[var(--color-primary)] px-3 py-1.5 text-[11px] font-bold text-[var(--color-primary-fg)] disabled:opacity-50"
             >
               Resume
             </button>

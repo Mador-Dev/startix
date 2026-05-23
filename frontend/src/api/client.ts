@@ -1,12 +1,10 @@
 import axios from "axios";
 import { getImpersonationToken, clearImpersonationState } from "../store/impersonationStore";
 
-// Lazy import to avoid circular dependency
-const getToken = () => {
+const getClerkToken = async (): Promise<string | null> => {
   try {
-    const raw = localStorage.getItem("auth-storage");
-    if (!raw) return null;
-    return JSON.parse(raw)?.state?.token ?? null;
+    // @ts-expect-error — window.Clerk is injected by @clerk/react at runtime
+    return (await window.Clerk?.session?.getToken()) ?? null;
   } catch {
     return null;
   }
@@ -17,10 +15,9 @@ export const apiClient = axios.create({
   timeout: 15000,
 });
 
-apiClient.interceptors.request.use((config) => {
-  // Prefer the impersonation token when an active session exists
+apiClient.interceptors.request.use(async (config) => {
   const impersonationToken = getImpersonationToken();
-  const token = impersonationToken ?? getToken();
+  const token = impersonationToken ?? await getClerkToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -28,7 +25,6 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (res) => res,
   (err) => {
-    // Log all API errors with stack trace for debugging
     const status = err.response?.status;
     const url = err.config?.url ?? "(unknown)";
     const method = (err.config?.method ?? "GET").toUpperCase();
@@ -39,30 +35,37 @@ apiClient.interceptors.response.use(
       err
     );
 
-    // 403 readonly_impersonation — let callers handle it (surface as toast)
     if (
       err.response?.status === 403 &&
       err.response?.data?.error === "readonly_impersonation"
     ) {
       return Promise.reject(err);
     }
+
     if (err.response?.status === 401) {
-      // If we're impersonating, clear the impersonation session and reload
       if (getImpersonationToken()) {
         clearImpersonationState();
         window.location.reload();
         return Promise.reject(err);
       }
-      localStorage.removeItem("auth-storage");
-      window.location.href = "/login";
+      // Only redirect to /login if Clerk has no active session.
+      // If Clerk is still signed in, the 401 is a transient backend issue — don't loop.
+      // @ts-expect-error — window.Clerk injected at runtime
+      const hasClerkSession = !!window.Clerk?.session;
+      if (!hasClerkSession) {
+        window.location.href = "/login";
+      }
     }
+
     if (
       err.response?.status === 404 &&
       err.response?.data?.error === "user workspace not found"
     ) {
-      localStorage.removeItem("auth-storage");
-      window.location.href = "/login";
+      // @ts-expect-error — window.Clerk injected at runtime
+      const hasClerkSession = !!window.Clerk?.session;
+      if (!hasClerkSession) window.location.href = "/login";
     }
+
     return Promise.reject(err);
   }
 );

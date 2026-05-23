@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Any, Literal
 
@@ -31,7 +29,7 @@ JobStatus = Literal[
 Verdict = Literal["BUY", "ADD", "HOLD", "REDUCE", "SELL", "CLOSE"]
 Confidence = Literal["high", "medium", "low"]
 ConversationRole = Literal["user", "assistant", "tool_result"]
-JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+JsonValue = Any
 
 
 class ScheduleInput(BaseModel):

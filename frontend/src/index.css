@@ -1,65 +1,108 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 @source "../src/**/*.{ts,tsx}";
 
 @layer base {
   :root {
     /* ============================================================
-       Design pivot tokens (rebalancer.shop spec) — source of truth.
-       Every component imports these. Never hardcode hex outside this file.
+       Startix Design Tokens — dark-first, shadcn/ui-aligned.
+       Source of truth. Never hardcode hex outside this file.
        ============================================================ */
 
-    /* backgrounds */
-    --bg-base: #111111;
+    /* backgrounds — pure black canvas */
+    --bg-base: #000000;
     --bg-surface: rgba(255, 255, 255, 0.04);
     --bg-surface-hover: rgba(255, 255, 255, 0.07);
-    --bg-border: rgba(255, 255, 255, 0.06);
-    --bg-border-mid: rgba(255, 255, 255, 0.10);
+    --bg-border: rgba(255, 255, 255, 0.08);
+    --bg-border-mid: rgba(255, 255, 255, 0.14);
 
-    /* semantic accents — only colors in the app */
-    --color-green: #42C97A;
-    --color-green-bg: rgba(66, 201, 122, 0.15);    /* chip/badge fill */
-    --color-green-tint: rgba(66, 201, 122, 0.07);  /* alert card surface */
-    --color-green-border: rgba(66, 201, 122, 0.25);
+    /* semantic accents — tuned for dark surfaces */
+    --color-green: #4ade80;
+    --color-green-bg: rgba(74, 222, 128, 0.15);
+    --color-green-tint: rgba(74, 222, 128, 0.07);
+    --color-green-border: rgba(74, 222, 128, 0.32);
 
-    --color-amber: #E0A030;
-    --color-amber-bg: rgba(224, 160, 48, 0.15);    /* chip/badge fill */
-    --color-amber-tint: rgba(224, 160, 48, 0.07);  /* alert card surface */
-    --color-amber-border: rgba(224, 160, 48, 0.25);
+    --color-amber: #fbbf24;
+    --color-amber-bg: rgba(251, 191, 36, 0.15);
+    --color-amber-tint: rgba(251, 191, 36, 0.07);
+    --color-amber-border: rgba(251, 191, 36, 0.32);
 
-    --color-red: #E25050;
-    --color-red-bg: rgba(226, 80, 80, 0.15);       /* chip/badge fill */
-    --color-red-tint: rgba(226, 80, 80, 0.07);     /* alert card surface */
-    --color-red-border: rgba(226, 80, 80, 0.25);
+    --color-red: #f87171;
+    --color-red-bg: rgba(248, 113, 113, 0.15);
+    --color-red-tint: rgba(248, 113, 113, 0.07);
+    --color-red-border: rgba(248, 113, 113, 0.32);
 
-    /* text */
-    --text-primary: #FFFFFF;
-    --text-secondary: rgba(255, 255, 255, 0.55);
-    --text-tertiary: rgba(255, 255, 255, 0.35);
-    --text-ghost: rgba(255, 255, 255, 0.15);
+    --color-info: #60a5fa;
+    --color-info-bg: rgba(96, 165, 250, 0.15);
+    --color-info-tint: rgba(96, 165, 250, 0.07);
+    --color-info-border: rgba(96, 165, 250, 0.32);
 
-    /* radii */
-    --radius-sm: 7px;
-    --radius-md: 10px;
-    --radius-lg: 14px;
-    --radius-pill: 999px;
+    /* text — white-on-black at three opacity tiers */
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.62);
+    --text-tertiary: rgba(255, 255, 255, 0.42);
+    --text-ghost: rgba(255, 255, 255, 0.22);
+
+    /* primary action — white button, black text (shadcn-dark) */
+    --color-primary: #ffffff;
+    --color-primary-fg: #000000;
+
+    /* radii — shadcn defaults */
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --radius-xl: 14px;
+    --radius-pill: 9999px;
 
     /* type scale */
-    --text-hero: 56px;    /* score on detail screen */
-    --text-xl: 26px;      /* portfolio value */
-    --text-lg: 18px;      /* section values */
-    --text-md: 14px;      /* body / holdings */
-    --text-sm: 12px;      /* supporting text */
-    --text-xs: 10px;      /* labels, metadata */
-    --text-2xs: 9px;      /* badges, caps */
+    --text-hero: 56px;
+    --text-xl: 26px;
+    --text-lg: 18px;
+    --text-md: 14px;
+    --text-sm: 12px;
+    --text-xs: 10px;
+    --text-2xs: 9px;
 
-    /* weight — two only */
+    /* weight */
     --weight-regular: 400;
+    --weight-medium: 500;
+    --weight-semibold: 600;
     --weight-bold: 700;
 
-    /* ============================================================
-       Legacy tokens — kept during incremental migration.
-       Map to new tokens where reasonable; existing components still reference these.
-       ============================================================ */
+    /* motion */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --duration-fast: 120ms;
+    --duration-base: 180ms;
+    --duration-slow: 260ms;
+
+    /* ── shadcn/ui-aligned aliases (used by new components & ui_kit) ── */
+    --background: var(--bg-base);
+    --surface: #0a0a0a;
+    --surface-muted: #141414;
+    --surface-hover: #1a1a1a;
+    --border: var(--bg-border);
+    --border-strong: var(--bg-border-mid);
+    --foreground: var(--text-primary);
+    --foreground-muted: var(--text-secondary);
+    --foreground-subtle: var(--text-tertiary);
+    --foreground-ghost: var(--text-ghost);
+    --primary: var(--color-primary);
+    --primary-foreground: var(--color-primary-fg);
+    --success: var(--color-green);
+    --success-bg: var(--color-green-bg);
+    --success-border: var(--color-green-border);
+    --success-tint: var(--color-green-tint);
+    --warning: var(--color-amber);
+    --warning-bg: var(--color-amber-bg);
+    --warning-border: var(--color-amber-border);
+    --warning-tint: var(--color-amber-tint);
+    --danger: var(--color-red);
+    --danger-bg: var(--color-red-bg);
+    --danger-border: var(--color-red-border);
+    --danger-tint: var(--color-red-tint);
+
+    /* ── Legacy aliases — keep all existing components working ── */
     --color-bg-base: var(--bg-base);
     --color-bg-subtle: var(--bg-surface);
     --color-bg-muted: var(--bg-surface-hover);
@@ -71,9 +114,9 @@
     --color-accent-green: var(--color-green);
     --color-accent-yellow: var(--color-amber);
     --color-accent-red: var(--color-red);
-    --color-accent-blue: var(--color-green);     /* blue retired — re-route to green for any stragglers */
-    --color-accent-purple: var(--color-green);   /* purple retired */
-    --color-accent-orange: var(--color-amber);   /* orange retired */
+    --color-accent-blue: var(--color-green);
+    --color-accent-purple: var(--color-green);
+    --color-accent-orange: var(--color-amber);
     color-scheme: dark;
   }
 
@@ -82,20 +125,19 @@
   body {
     background-color: var(--bg-base);
     color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-weight: var(--weight-regular);
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     overscroll-behavior: none;
   }
 
-  /* Stronger heading hierarchy */
   h1, h2, h3 {
     font-weight: var(--weight-bold);
     color: var(--text-primary);
     letter-spacing: -0.01em;
   }
 
-  /* Make body text slightly more opaque for readability */
   p, span, div {
     -webkit-font-smoothing: antialiased;
   }
@@ -130,31 +172,39 @@
 
 /* ── Bright theme (light mode) ── */
 [data-theme="bright"] {
-  --bg-base: #F5F5F5;
+  --bg-base: #f8fafc;
   --bg-surface: rgba(0, 0, 0, 0.04);
   --bg-surface-hover: rgba(0, 0, 0, 0.07);
   --bg-border: rgba(0, 0, 0, 0.08);
   --bg-border-mid: rgba(0, 0, 0, 0.14);
 
-  --color-green: #1A9A52;
-  --color-green-bg: rgba(26, 154, 82, 0.12);
-  --color-green-tint: rgba(26, 154, 82, 0.07);
-  --color-green-border: rgba(26, 154, 82, 0.25);
+  --color-green: #16a34a;
+  --color-green-bg: rgba(22, 163, 74, 0.12);
+  --color-green-tint: rgba(22, 163, 74, 0.07);
+  --color-green-border: rgba(22, 163, 74, 0.25);
 
-  --color-amber: #B36A00;
-  --color-amber-bg: rgba(179, 106, 0, 0.12);
-  --color-amber-tint: rgba(179, 106, 0, 0.07);
-  --color-amber-border: rgba(179, 106, 0, 0.25);
+  --color-amber: #d97706;
+  --color-amber-bg: rgba(217, 119, 6, 0.12);
+  --color-amber-tint: rgba(217, 119, 6, 0.07);
+  --color-amber-border: rgba(217, 119, 6, 0.25);
 
-  --color-red: #C42B2B;
-  --color-red-bg: rgba(196, 43, 43, 0.12);
-  --color-red-tint: rgba(196, 43, 43, 0.07);
-  --color-red-border: rgba(196, 43, 43, 0.25);
+  --color-red: #dc2626;
+  --color-red-bg: rgba(220, 38, 38, 0.12);
+  --color-red-tint: rgba(220, 38, 38, 0.07);
+  --color-red-border: rgba(220, 38, 38, 0.25);
 
-  --text-primary: #111111;
+  --color-primary: #0f172a;
+  --color-primary-fg: #f8fafc;
+  --text-primary: #0f172a;
   --text-secondary: rgba(0, 0, 0, 0.55);
   --text-tertiary: rgba(0, 0, 0, 0.38);
   --text-ghost: rgba(0, 0, 0, 0.12);
 
   color-scheme: light;
+}
+
+@keyframes app-loader-slide {
+  0%   { transform: translateX(-100%); }
+  60%  { transform: translateX(350%); }
+  100% { transform: translateX(350%); }
 }

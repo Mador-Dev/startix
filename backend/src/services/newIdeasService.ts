@@ -8,6 +8,7 @@ import { updateJob } from "./jobService.js";
 import { runNewIdeasAdvisor } from "./advisorLlmService.js";
 import { publishNotification } from "./notificationService.js";
 import { buildStrategyMetadata } from "./strategyBaselineService.js";
+import { putReportBatch } from "./reportIndexStore.js";
 
 interface CandidateIdea {
   ticker: string;
@@ -527,62 +528,21 @@ async function appendNewIdeasBatch(
 ): Promise<void> {
   const batchId = `batch_${job.id}_new_ideas`;
   const generatedAt = job.completed_at ?? new Date().toISOString();
-  const indexDir = path.join(ws.reportsDir, "index");
-  await fs.mkdir(indexDir, { recursive: true });
-
-  const metaPath = path.join(indexDir, "meta.json");
-  let meta: {
-    totalBatches: number;
-    totalPages: number;
-    lastUpdated: string | null;
-    newestBatchId: string | null;
-    pageSize?: number;
-  } = {
-    totalBatches: 0,
-    totalPages: 1,
-    lastUpdated: null,
-    newestBatchId: null,
-    pageSize: 10,
-  };
-  try {
-    meta = JSON.parse(await fs.readFile(metaPath, "utf-8")) as typeof meta;
-  } catch {}
-
-  const pagePath = path.join(indexDir, "page-001.json");
-  let page: {
-    page: number;
-    totalPages: number;
-    batches: Array<{ batchId: string } & Record<string, unknown>>;
-  } = {
-    page: 1,
-    totalPages: 1,
-    batches: [],
-  };
-  try {
-    page = JSON.parse(await fs.readFile(pagePath, "utf-8")) as typeof page;
-  } catch {}
-
-  page.batches = page.batches.filter((entry) => entry.batchId !== batchId);
-  page.batches.unshift({
+  await putReportBatch({
     batchId,
+    userId: ws.userId,
+    jobId: job.id,
+    mode: "new_ideas",
     triggeredAt: generatedAt,
     date: generatedAt.slice(0, 10),
-    mode: "new_ideas",
-    tickers: entries.map((entry) => entry.ticker),
-    tickerCount: entries.length,
-    jobId: job.id,
-    entries: Object.fromEntries(entries.map((entry) => [entry.ticker, entry])),
+    summary: null,
+    highlights: null,
+    entries: entries.map((entry) => ({
+      ticker: entry.ticker,
+      dailySection: null,
+      entry: entry as unknown as Record<string, unknown>,
+    })),
   });
-  page.batches = page.batches.slice(0, meta.pageSize ?? 10);
-
-  meta.totalBatches = Math.max(meta.totalBatches, page.batches.length);
-  meta.totalPages = 1;
-  meta.lastUpdated = generatedAt;
-  meta.newestBatchId = batchId;
-
-  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
-  await fs.writeFile(pagePath, JSON.stringify(page, null, 2), "utf-8");
-
   await publishNotification({
     userId: ws.userId,
     kind: "new_ideas",

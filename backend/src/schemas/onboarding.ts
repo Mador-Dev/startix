@@ -24,10 +24,13 @@ export const ScheduleSchema = z.object({
 export type Schedule = z.infer<typeof ScheduleSchema>;
 
 export const OnboardInitSchema = z.object({
+  // Accepts legacy short IDs (4-32 chars) and Clerk user IDs (user_xxx format)
   userId: z
     .string()
-    .regex(/^[a-zA-Z0-9-]{4,32}$/, "userId must be 4-32 alphanumeric chars or hyphens"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+    .min(4)
+    .max(64)
+    .regex(/^[a-zA-Z0-9_-]+$/, "userId must be alphanumeric with underscores or hyphens"),
+  password: z.string().min(8, "Password must be at least 8 characters").optional(),
   displayName: z.string().min(1).max(50),
   telegramChatId: z.string().regex(/^\d+$/, "Must be numeric").or(z.literal("")).optional(),
   schedule: ScheduleSchema,

@@ -2,8 +2,7 @@ import { PortfolioFileSchema } from "../schemas/portfolio.js";
 import type { PortfolioState, PortfolioStateData } from "../types/index.js";
 import { readUserState, writeUserState } from "./userStore.js";
 import { readPortfolio } from "./portfolioStore.js";
-import { loadUserStrategy } from "./strategyAccess.js";
-import { getWorkspace } from "./workspaceService.js";
+import { listStrategies } from "./strategyStore.js";
 
 export class StateTransitionError extends Error {
   constructor(
@@ -131,32 +130,19 @@ export interface ConditionCheckResult {
 }
 
 export async function checkDailyConditions(userId: string): Promise<ConditionCheckResult> {
-  const ws = await getWorkspace(userId);
   const expiredCatalysts: ConditionCheckResult["expiredCatalysts"] = [];
   const pendingDeepDives: string[] = [];
 
-  let tickerDirs: string[] = [];
-  try {
-    const { promises: fs } = await import("fs");
-    tickerDirs = await fs.readdir(ws.tickersDir);
-  } catch {
-    // No tickers dir yet
-  }
-
+  const strategies = await listStrategies(userId).catch(() => []);
   const now = new Date();
 
-  for (const ticker of tickerDirs) {
-    const strategyPath = ws.strategyFile(ticker);
-    const loaded = await loadUserStrategy(userId, strategyPath, { repair: true, tickerHint: ticker });
-    if (!loaded.valid || !loaded.strategy) continue;
-    const strategy = loaded.strategy;
-
+  for (const strategy of strategies) {
     const catalysts = strategy.catalysts ?? [];
     for (const catalyst of catalysts) {
       const expiresAt = catalyst.expiresAt;
       if (expiresAt && new Date(expiresAt) < now) {
         expiredCatalysts.push({
-          ticker,
+          ticker: strategy.ticker,
           catalyst: catalyst.description,
           expiredAt: expiresAt,
         });
@@ -167,7 +153,7 @@ export async function checkDailyConditions(userId: string): Promise<ConditionChe
       const hasExpiring = catalysts.some(
         (c) => c.expiresAt !== null && new Date(c.expiresAt) > now
       );
-      if (!hasExpiring) pendingDeepDives.push(ticker);
+      if (!hasExpiring) pendingDeepDives.push(strategy.ticker);
     }
   }
 

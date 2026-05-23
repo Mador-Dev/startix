@@ -4,6 +4,7 @@ import { eventStore } from "./eventStore.js";
 import { budgetStore } from "./budgetStore.js";
 import { DEFAULT_POINTS_BUDGET, type PointsBudgetConfig } from "../types/index.js";
 import { resolveConfiguredPath } from "./paths.js";
+import { ensureUserRecord } from "./userStore.js";
 
 const USERS_DIR = resolveConfiguredPath(process.env["USERS_DIR"], "../users");
 export const POINTS_PER_USD = 1000;
@@ -21,14 +22,6 @@ export interface PointsBalanceSnapshot {
 
 function profilePath(userId: string): string {
   return path.join(USERS_DIR, userId, "profile.json");
-}
-
-async function ensureUserProfileExists(userId: string): Promise<void> {
-  try {
-    await fs.access(profilePath(userId));
-  } catch {
-    throw new Error("User not found");
-  }
 }
 
 function normalizeDailyBudgetPoints(value: unknown): number {
@@ -86,7 +79,7 @@ export async function getUserPointsBudget(userId: string): Promise<PointsBudgetC
     return { dailyBudgetPoints: normalizeDailyBudgetPoints(persisted.dailyBudgetPoints) };
   }
 
-  await ensureUserProfileExists(userId);
+  await ensureUserRecord(userId);
   const legacy = await readLegacyPointsBudget(userId);
   const next = legacy ?? DEFAULT_POINTS_BUDGET;
   await budgetStore.upsertUserPointsBudget(userId, next.dailyBudgetPoints);
@@ -97,7 +90,7 @@ export async function setUserPointsBudget(
   userId: string,
   input: Partial<PointsBudgetConfig>
 ): Promise<PointsBudgetConfig> {
-  await ensureUserProfileExists(userId);
+  await ensureUserRecord(userId);
   const current = await getUserPointsBudget(userId);
   const next = {
     dailyBudgetPoints: normalizeDailyBudgetPoints(

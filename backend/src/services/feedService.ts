@@ -1,9 +1,6 @@
-import { promises as fs } from "fs";
-import path from "path";
-import type { UserWorkspace } from "../middleware/userIsolation.js";
-import { resolveConfiguredPath } from "./paths.js";
+import { getApplicationDataSource, isApplicationDatabaseConfigured } from "../db/applicationDataSource.js";
+import { listBatchesWithEntries, type BatchWithEntries } from "./reportIndexStore.js";
 
-const USERS_DIR = resolveConfiguredPath(process.env["USERS_DIR"], "../users");
 const MAX_STORED_EVENTS = 250;
 export const FEED_PAGE_SIZE = 15;
 
@@ -108,10 +105,6 @@ export interface FeedQuery {
   pageNum: number;
   mode?: string | null;
   search?: string | null;
-}
-
-function feedEventsPath(userId: string): string {
-  return path.join(USERS_DIR, userId, "feed", "events.json");
 }
 
 function toneForMode(mode: string): FeedItem["tone"] {
@@ -240,35 +233,52 @@ export function buildReportFeedItems(batches: StoredBatch[]): FeedItem[] {
 }
 
 export async function listFeedEvents(userId: string, limit = 100): Promise<FeedEventRecord[]> {
-  try {
-    const raw = await fs.readFile(feedEventsPath(userId), "utf-8");
-    const parsed = JSON.parse(raw) as FeedEventRecord[];
-    return parsed.slice(0, limit);
-  } catch {
-    return [];
-  }
+  if (!isApplicationDatabaseConfigured()) return [];
+  const ds = await getApplicationDataSource();
+  interface Row { id: string; kind: string; ticker: string; title: string; summary: string; source: string; url: string | null; created_at: Date | string }
+  const rows = (await ds.query(
+    `SELECT id, kind, ticker, title, summary, source, url, created_at
+       FROM feed_events WHERE user_id = $1
+       ORDER BY created_at DESC LIMIT $2`,
+    [userId, limit]
+  )) as Row[];
+  return rows.map((r) => ({
+    id: r.id,
+    kind: "market_news" as const,
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : new Date(r.created_at).toISOString(),
+    ticker: r.ticker,
+    title: r.title,
+    summary: r.summary,
+    source: r.source,
+    url: r.url,
+  }));
 }
 
 export async function appendFeedEvent(
   userId: string,
   event: Omit<FeedEventRecord, "id" | "createdAt">
 ): Promise<FeedEventRecord> {
-  const record: FeedEventRecord = {
-    id: `evt_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-    createdAt: new Date().toISOString(),
-    ...event,
-  };
-
-  const filePath = feedEventsPath(userId);
-  let current: FeedEventRecord[] = [];
-  try {
-    current = JSON.parse(await fs.readFile(filePath, "utf-8")) as FeedEventRecord[];
-  } catch {}
-
-  const next = [record, ...current].slice(0, MAX_STORED_EVENTS);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(next, null, 2), "utf-8");
-  try {
+  const id = `evt_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  if (isApplicationDatabaseConfigured()) {
+    const ds = await getApplicationDataSource();
+    interface Row { id: string; created_at: Date | string }
+    const rows = (await ds.query(
+      `INSERT INTO feed_events (id, user_id, kind, ticker, title, summary, source, url)
+         VALUES ($1, $2, 'market_news', $3, $4, $5, $6, $7)
+         RETURNING id, created_at`,
+      [id, userId, event.ticker, event.title, event.summary, event.source, event.url ?? null]
+    )) as Row[];
+    const row = rows[0]!;
+    const record: FeedEventRecord = {
+      id: row.id,
+      kind: "market_news",
+      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
+      ticker: event.ticker,
+      title: event.title,
+      summary: event.summary,
+      source: event.source,
+      url: event.url,
+    };
     const { publishNotification } = await import("./notificationService.js");
     await publishNotification({
       userId,
@@ -278,24 +288,34 @@ export async function appendFeedEvent(
       ticker: event.ticker,
       batchId: null,
       actionUrl: event.url,
-    });
-  } catch {
-    // Feed event storage stays authoritative even if notification publication fails.
+    }).catch(() => undefined);
+    return record;
   }
+
+  const record: FeedEventRecord = {
+    ...event,
+    id,
+    kind: "market_news",
+    createdAt: new Date().toISOString(),
+  };
   return record;
 }
 
-async function readAllReportBatches(
-  ws: UserWorkspace,
-  readCurrentMeta: (ws: UserWorkspace) => Promise<{ totalPages: number }>,
-  readCurrentPage: (ws: UserWorkspace, pageNum: number) => Promise<{ page: number; totalPages: number; batches: StoredBatch[] } | null>
-): Promise<StoredBatch[]> {
-  const meta = await readCurrentMeta(ws);
-  const totalPages = Math.max(1, meta.totalPages || 1);
-  const pages = await Promise.all(
-    Array.from({ length: totalPages }, (_, index) => readCurrentPage(ws, index + 1))
-  );
-  return pages.flatMap((page) => page?.batches ?? []);
+function batchWithEntriesToStoredBatch(b: BatchWithEntries): StoredBatch {
+  const summaryRaw = b.summary as Record<string, unknown> | null;
+  const batch: StoredBatch = {
+    batchId: b.batchId,
+    triggeredAt: b.triggeredAt,
+    date: b.date,
+    mode: b.mode,
+    tickers: b.tickers,
+    tickerCount: b.tickerCount,
+    jobId: b.jobId,
+    entries: b.entries as unknown as Record<string, StoredBatchEntry>,
+  };
+  if (summaryRaw) batch.summary = summaryRaw as NonNullable<StoredBatch["summary"]>;
+  if (Array.isArray(b.highlights)) batch.highlights = b.highlights as string[];
+  return batch;
 }
 
 function toEventFeedItem(event: FeedEventRecord): FeedItem {
@@ -351,14 +371,8 @@ function matchesFeedItem(item: FeedItem, mode: string | null | undefined, search
 }
 
 export async function readFeedPage(
-  ws: UserWorkspace,
+  userId: string,
   query: FeedQuery,
-  readCurrentMeta: (ws: UserWorkspace) => Promise<{ totalPages: number }>,
-  readCurrentPage: (ws: UserWorkspace, pageNum: number) => Promise<{
-    page: number;
-    totalPages: number;
-    batches: StoredBatch[];
-  } | null>
 ): Promise<{
   page: number;
   totalPages: number;
@@ -368,10 +382,11 @@ export async function readFeedPage(
   appliedSearch: string | null;
   items: FeedItem[];
 }> {
-  const [batches, events] = await Promise.all([
-    readAllReportBatches(ws, readCurrentMeta, readCurrentPage),
-    listFeedEvents(ws.userId, MAX_STORED_EVENTS),
+  const [rawBatches, events] = await Promise.all([
+    listBatchesWithEntries(userId, MAX_STORED_EVENTS),
+    listFeedEvents(userId, MAX_STORED_EVENTS),
   ]);
+  const batches = rawBatches.map(batchWithEntriesToStoredBatch);
 
   const allItems = [...events.map(toEventFeedItem), ...buildReportFeedItems(batches)]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { useAuth } from "@clerk/react";
 import { useAuthStore } from "./store/authStore";
 import { BottomNav } from "./components/ui/BottomNav";
 import { ToastContainer } from "./components/ui/Toast";
@@ -21,17 +22,17 @@ import { fetchControlState } from "./api/control";
 import { fetchNotifications, markNotificationsRead } from "./api/notifications";
 import { ControlBanner } from "./components/ControlBanner";
 import { SuspensionPage } from "./pages/SuspensionPage";
-import { Spinner } from "./components/ui/Spinner";
+import { AppLoader } from "./components/ui/AppLoader";
 import { useToastStore } from "./store/toastStore";
 
 const queryClient = new QueryClient({
- defaultOptions: {
- queries: {
- retry: 1,
- staleTime: 30_000,
- refetchOnWindowFocus: false,
- },
- },
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+    },
+  },
 });
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -83,13 +84,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-[var(--color-bg-base)]">
-        <Spinner size="lg" />
-      </div>
-    );
-  }
+  if (isLoading) return <AppLoader />;
 
   if (error || !onboardStatus) return <>{children}</>;
 
@@ -97,7 +92,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/onboarding" replace />;
   }
 
-  // Suspended: full-screen suspension page, no navigation
   if (controlState?.restriction === "suspended") {
     return <SuspensionPage reason={controlState.reason} />;
   }
@@ -111,101 +105,99 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Separate route guard for onboarding - prevents returning to completed onboarding
 function OnboardingRoute() {
- const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
- const { data: onboardStatus, isLoading } = useQuery({
-   queryKey: ["onboard-status"],
-   queryFn: fetchOnboardStatus,
-   enabled: isAuthenticated,
-   staleTime: 60_000,
- });
+  const { data: onboardStatus } = useQuery({
+    queryKey: ["onboard-status"],
+    queryFn: fetchOnboardStatus,
+    enabled: isAuthenticated,
+    staleTime: 60_000,
+  });
 
- if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
 
- if (isLoading) {
-   return (
-     <div className="flex items-center justify-center min-h-screen bg-[var(--color-bg-base)]">
-       <Spinner size="lg" />
-     </div>
-   );
- }
+  if (onboardStatus?.portfolioLoaded && !onboardStatus.guidanceStepPending) {
+    return <Navigate to="/portfolio" replace />;
+  }
 
- // If portfolio already loaded, send them to portfolio - no going back
- if (onboardStatus?.portfolioLoaded && !onboardStatus.guidanceStepPending) {
-   return <Navigate to="/portfolio" replace />;
- }
-
- return <Onboarding />;
+  return <Onboarding />;
 }
 
 function AppLayout({ children }: { children: React.ReactNode }) {
- const location = useLocation();
- const isChatRoute = location.pathname === "/chat";
+  const location = useLocation();
+  const isChatRoute = location.pathname === "/chat";
 
- return (
- <div className={isChatRoute ? "h-[100dvh] overflow-hidden bg-[var(--color-bg-base)]" : "bg-[var(--color-bg-base)] min-h-screen"}>
- <div className={isChatRoute ? "chat-page-content" : "page-content"}>{children}</div>
- <BottomNav />
- </div>
- );
+  return (
+    <div className={isChatRoute ? "h-[100dvh] overflow-hidden bg-[var(--color-bg-base)]" : "bg-[var(--color-bg-base)] min-h-screen"}>
+      <div className={isChatRoute ? "chat-page-content" : "page-content"}>{children}</div>
+      <BottomNav />
+    </div>
+  );
+}
+
+function AuthGate() {
+  const { isSignedIn, isLoaded } = useAuth();
+
+  if (!isLoaded) return <AppLoader />;
+
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/onboarding" element={<OnboardingRoute />} />
+      <Route path="/" element={
+        isSignedIn
+          ? <Navigate to="/portfolio" replace />
+          : <Navigate to="/login" replace />
+      } />
+      <Route path="/portfolio" element={
+        <ProtectedRoute>
+          <AppLayout><Portfolio /></AppLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/alerts" element={
+        <ProtectedRoute>
+          <AppLayout><Alerts /></AppLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/reports" element={
+        <ProtectedRoute>
+          <AppLayout><Reports /></AppLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/strategies" element={
+        <ProtectedRoute>
+          <AppLayout><Strategies /></AppLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/settings" element={
+        <ProtectedRoute>
+          <AppLayout><Settings /></AppLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/controls" element={
+        <ProtectedRoute>
+          <AppLayout><Controls /></AppLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/admin" element={<Admin />} />
+      <Route path="/chat" element={
+        <ProtectedRoute>
+          <AppLayout><Chat /></AppLayout>
+        </ProtectedRoute>
+      } />
+    </Routes>
+  );
 }
 
 export default function App() {
- const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-
- return (
- <QueryClientProvider client={queryClient}>
- <BrowserRouter>
-   <ImpersonationBanner />
- <Routes>
- <Route path="/login" element={<Login />} />
- <Route path="/onboarding" element={<OnboardingRoute />} />
- <Route path="/" element={
- isAuthenticated
- ? <Navigate to="/portfolio" replace />
- : <Navigate to="/login" replace />
- } />
- <Route path="/portfolio" element={
- <ProtectedRoute>
- <AppLayout><Portfolio /></AppLayout>
- </ProtectedRoute>
- } />
- <Route path="/alerts" element={
- <ProtectedRoute>
- <AppLayout><Alerts /></AppLayout>
- </ProtectedRoute>
- } />
- <Route path="/reports" element={
- <ProtectedRoute>
- <AppLayout><Reports /></AppLayout>
- </ProtectedRoute>
- } />
- <Route path="/strategies" element={
- <ProtectedRoute>
- <AppLayout><Strategies /></AppLayout>
- </ProtectedRoute>
- } />
- <Route path="/settings" element={
- <ProtectedRoute>
- <AppLayout><Settings /></AppLayout>
- </ProtectedRoute>
- } />
- <Route path="/controls" element={
- <ProtectedRoute>
- <AppLayout><Controls /></AppLayout>
- </ProtectedRoute>
- } />
- <Route path="/admin" element={<Admin />} />
- <Route path="/chat" element={
- <ProtectedRoute>
- <AppLayout><Chat /></AppLayout>
- </ProtectedRoute>
- } />
- </Routes>
- <ToastContainer />
- </BrowserRouter>
- </QueryClientProvider>
- );
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <ImpersonationBanner />
+        <AuthGate />
+        <ToastContainer />
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
 }

@@ -1,9 +1,8 @@
 import { getApplicationDataSource, isApplicationDatabaseConfigured } from "../db/applicationDataSource.js";
 import { z } from "zod";
 import { PortfolioFileSchema } from "../schemas/portfolio.js";
-
-type PortfolioFile = z.infer<typeof PortfolioFileSchema>;
 import { logger } from "./logger.js";
+import { ensureUserRecord } from "./userStore.js";
 
 type PortfolioFile = z.infer<typeof PortfolioFileSchema>;
 
@@ -31,6 +30,7 @@ export async function readPortfolio(userId: string): Promise<PortfolioFile | nul
 
 export async function writePortfolio(userId: string, portfolio: PortfolioFile): Promise<void> {
   requireDatabase();
+  await ensureUserRecord(userId);
   const parsed = PortfolioFileSchema.parse(portfolio);
   const ds = await getApplicationDataSource();
   await ds.query(

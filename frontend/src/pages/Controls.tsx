@@ -90,7 +90,7 @@ function ActionCard({
         className={`w-full py-2 rounded-lg text-xs font-bold disabled:opacity-50 mt-1 ${
           blocked
             ? "border border-[var(--color-border)] bg-[var(--color-bg-muted)] text-[var(--color-fg-subtle)]"
-            : "bg-[var(--color-accent-blue)] text-white"
+            : "bg-[var(--color-primary)] text-[var(--color-primary-fg)]"
         }`}
       >
         {blocked ? t("comingSoon", language) : loading ? "..." : t("run", language)}

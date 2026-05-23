@@ -53,7 +53,7 @@ export type TranslationKey =
   // Strategies
   | "strategies" | "errorLoadStrategies" | "emptyStrategies" | "noStrategyMatches"
   | "searchTicker" | "filterAll" | "expiredCatalyst" | "strategyTabPortfolio" | "strategyTabNonPortfolio"
-  | "searchNoResults" | "searchUnexpectedError" | "searchUnexpectedErrorHelp"
+  | "searchNoResults" | "searchLoading" | "searchUnexpectedError" | "searchUnexpectedErrorHelp"
   | "colConfidence" | "colTimeframe" | "colSize" | "colWeightPct" | "colReasoning" | "colUpdated"
   // Controls
   | "controls" | "activeJobs" | "recentJobs" | "noJobs" | "enterTicker" | "tickerRequired"
@@ -102,6 +102,7 @@ export type TranslationKey =
   | "onboardTickerLabel" | "onboardSharesLabel" | "onboardAvgPriceLabel" | "onboardExchangeLabel"
   | "onboardDuplicateTicker" | "onboardTickerRequired" | "onboardSharesError"
   | "onboardAvgPriceError" | "onboardAddPositionError"
+  | "onboardPriceFetching" | "onboardPriceUnavailable" | "onboardMarketPriceHint"
   | "onboardStep5Title" | "onboardStep5Sub" | "onboardLaunch" | "onboardLaunching"
   | "onboardSetupFailed"
   | "onboardStep6Title" | "onboardStep6Sub" | "onboardStep6Hint"
@@ -168,8 +169,8 @@ export const translations: Translations = {
     controlsTab: "Controls",
     chatTab: "Chat",
     // Login
-    loginTitle: "Portfolio Command Center",
-    loginSubtitle: "Sign in to your account",
+    loginTitle: "Startix",
+    loginSubtitle: "Know exactly what to do with every position",
     loginUserId: "User ID",
     loginPassword: "Password",
     loginSignIn: "Sign In",
@@ -333,6 +334,7 @@ export const translations: Translations = {
     noStrategyMatches: "No strategies match your filter",
     searchTicker: "Search ticker...",
     searchNoResults: "No results for",
+    searchLoading: "Searching…",
     searchUnexpectedError: "Something unexpected happened.",
     searchUnexpectedErrorHelp: "Try again and if problem persists - contact help with help button.",
     filterAll: "All",
@@ -425,10 +427,10 @@ export const translations: Translations = {
     fullReportStarted: "Full portfolio analysis started — you'll be notified when ready",
     errorStartFullReport: "Failed to start full report",
     // App banner
-    healthBanner: "Your AI advisor is experiencing issues. Reports may be delayed — please contact support.",
+    healthBanner: "Startix AI is experiencing issues. Strategy updates may be delayed — please contact support.",
     // Onboarding
     onboardStep1Title: "Account Setup",
-    onboardStep1Sub: "Create your portfolio agent account",
+    onboardStep1Sub: "Create your Startix account",
     onboardAdminKey: "Beta Access Code",
     onboardUserId: "User ID",
     onboardPassword: "Password",
@@ -474,12 +476,15 @@ export const translations: Translations = {
     onboardReview: "Review",
     onboardTickerLabel: "Ticker",
     onboardSharesLabel: "Shares",
-    onboardAvgPriceLabel: "Avg Price",
+    onboardAvgPriceLabel: "Market price",
+    onboardMarketPriceHint: "Live quote",
+    onboardPriceFetching: "Fetching live price…",
+    onboardPriceUnavailable: "Could not fetch price. Try another ticker.",
     onboardExchangeLabel: "Exchange",
     onboardDuplicateTicker: "Duplicate ticker",
     onboardTickerRequired: "Ticker required",
     onboardSharesError: "Positive integer",
-    onboardAvgPriceError: "Positive number",
+    onboardAvgPriceError: "Price required",
     onboardAddPositionError: "Add at least one position",
     onboardStep5Title: "Confirm & Launch",
     onboardStep5Sub: "Review before launching",
@@ -488,7 +493,7 @@ export const translations: Translations = {
     onboardSetupFailed: "Setup failed. Please check your details and try again.",
     onboardStep6Title: "Position Guidance",
     onboardStep6Sub: "Optional: add your own thinking before the first analysis pass.",
-    onboardStep6Hint: "You can skip this step, annotate a few important positions, or fill everything. Your portfolio assistant will use this as structured context for the first strategy pass.",
+    onboardStep6Hint: "You can skip this step, annotate a few important positions, or fill everything. Startix will use this as structured context for the first strategy pass.",
     onboardGuidanceOptional: "Optional per-position context",
     onboardGuidanceThesis: "Why do you own it?",
     onboardGuidanceThesisPlaceholder: "Brief thesis or what you think matters here.",
@@ -512,7 +517,7 @@ export const translations: Translations = {
     onboardTelegramNo: "Not connected",
     // Admin
     adminTitle: "Admin Panel",
-    adminLoginSub: "rebalancer.shop",
+    adminLoginSub: "startix.app",
     adminKeyPlaceholder: "Admin Key",
     adminLoginError: "Invalid admin key",
     adminAddUser: "Add User",
@@ -583,17 +588,17 @@ export const translations: Translations = {
     onboardAcross: "across",
     onboardAt: "at",
     onboardDailyAt: "Daily at",
-    onboardLaunchBtn: "Launch My Portfolio Agent 🚀",
+    onboardLaunchBtn: "Launch Startix 🚀",
     // Greetings
-    greeting1: "Let's monitor some positions 📈",
-    greeting2: "Keep an eye on things 👀",
-    greeting3: "Your portfolio, your rules 🚀",
-    greeting4: "Time to check the numbers 📊",
-    greeting5: "Welcome back, boss 👑",
-    greeting6: "Let's make some gains 💰",
+    greeting1: "Strategy check — let's see what needs attention 📊",
+    greeting2: "Every position has a story. Let's read yours 📈",
+    greeting3: "Stay ahead of every position 🎯",
+    greeting4: "What's your strategy saying today? 📊",
+    greeting5: "Good to have you back. Let's sync up 🔄",
+    greeting6: "Positions don't manage themselves. You do 💡",
     // Today screen — pilot v1
     todayTitle: "Today",
-    setupBannerTitle: "Preparing your portfolio",
+    setupBannerTitle: "Startix is analyzing your positions",
     setupBannerBodyChannelAgnostic: "We'll notify you when ready.",
     setupBannerBodyTelegram: "We'll notify you on Telegram when ready.",
     setupBannerProgress: "Analyzed {analyzed} of {total} positions",
@@ -627,8 +632,8 @@ export const translations: Translations = {
     controlsTab: "בקרה",
     chatTab: "צ'אט",
     // Login
-    loginTitle: "מרכז פיקוד תיק השקעות",
-    loginSubtitle: "התחבר לחשבונך",
+    loginTitle: "Startix",
+    loginSubtitle: "תמיד מסונכרן עם האסטרטגיה של הפוזיציות שלך",
     loginUserId: "מזהה משתמש",
     loginPassword: "סיסמה",
     loginSignIn: "כניסה",
@@ -792,6 +797,7 @@ export const translations: Translations = {
     noStrategyMatches: "לא נמצאו אסטרטגיות התואמות לסינון",
     searchTicker: "חיפוש מניה...",
     searchNoResults: "לא נמצאו תוצאות עבור",
+    searchLoading: "מחפש…",
     searchUnexpectedError: "קרה משהו לא צפוי.",
     searchUnexpectedErrorHelp: "נסה שוב ואם הבעיה נמשכת - פנה לעזרה דרך כפתור העזרה.",
     filterAll: "הכל",
@@ -933,12 +939,15 @@ export const translations: Translations = {
     onboardReview: "סקירה",
     onboardTickerLabel: "מניה",
     onboardSharesLabel: "כמות",
-    onboardAvgPriceLabel: "מחיר ממוצע",
+    onboardAvgPriceLabel: "מחיר שוק",
+    onboardMarketPriceHint: "מחיר חי",
+    onboardPriceFetching: "טוען מחיר חי…",
+    onboardPriceUnavailable: "לא ניתן לטעון מחיר. נסה מניה אחרת.",
     onboardExchangeLabel: "בורסה",
     onboardDuplicateTicker: "מניה כפולה",
     onboardTickerRequired: "מניה נדרשת",
     onboardSharesError: "מספר שלם חיובי",
-    onboardAvgPriceError: "מספר חיובי",
+    onboardAvgPriceError: "מחיר נדרש",
     onboardAddPositionError: "הוסף לפחות פוזיציה אחת",
     onboardStep5Title: "אישור והשקה",
     onboardStep5Sub: "בדוק לפני ההשקה",
@@ -971,7 +980,7 @@ export const translations: Translations = {
     onboardTelegramNo: "לא מחובר",
     // Admin
     adminTitle: "לוח ניהול",
-    adminLoginSub: "rebalancer.shop",
+    adminLoginSub: "startix.app",
     adminKeyPlaceholder: "מפתח מנהל",
     adminLoginError: "מפתח מנהל שגוי",
     adminAddUser: "הוסף משתמש",
@@ -1042,17 +1051,17 @@ export const translations: Translations = {
     onboardAcross: "על פני",
     onboardAt: "ב-",
     onboardDailyAt: "יומי ב-",
-    onboardLaunchBtn: "השקת סוכן תיק ההשקעות שלי 🚀",
+    onboardLaunchBtn: "הפעלת Startix 🚀",
     // Greetings
-    greeting1: "בואו נעקוב אחרי הפוזיציות 📈",
-    greeting2: "שמרו על העין 👀",
-    greeting3: "התיק שלכם, הכללים שלכם 🚀",
-    greeting4: "זמן לבדוק את המספרים 📊",
-    greeting5: "ברוך שובך 👑",
-    greeting6: "בואו נרוויח 💰",
+    greeting1: "בדיקת אסטרטגיה — בואו נראה מה דורש תשומת לב 📊",
+    greeting2: "לכל פוזיציה יש סיפור. בואו נקרא את שלך 📈",
+    greeting3: "תמיד צעד אחד לפני הפוזיציות שלך 🎯",
+    greeting4: "מה האסטרטגיה אומרת היום? 📊",
+    greeting5: "כיף שחזרת. בואו נסתנכרן 🔄",
+    greeting6: "פוזיציות לא מנהלות את עצמן. אתה כאן בשביל זה 💡",
     // Today screen — pilot v1
     todayTitle: "היום",
-    setupBannerTitle: "מכין את התיק שלך",
+    setupBannerTitle: "Startix מנתח את הפוזיציות שלך",
     setupBannerBodyChannelAgnostic: "נעדכן אותך כשהפעולה תסתיים.",
     setupBannerBodyTelegram: "נעדכן אותך בטלגרם כשהפעולה תסתיים.",
     setupBannerProgress: "נותחו {analyzed} מתוך {total} פוזיציות",

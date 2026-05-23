@@ -49,7 +49,7 @@ export const checkNeedsOnboarding = async (): Promise<boolean> => {
 
 export interface OnboardInitPayload {
   userId: string;
-  password: string;
+  password?: string;
   displayName: string;
   telegramChatId: string;
   schedule: {
@@ -70,6 +70,16 @@ export const submitOnboardInit = async (
     })
   ).data;
 
+/** Create the backend workspace for the signed-in Clerk user (no admin key). */
+export const provisionAccount = async (displayName?: string): Promise<{
+  userId: string;
+  created: boolean;
+  nextStep: string;
+}> =>
+  (
+    await apiClient.post("/onboard/provision", displayName ? { displayName } : {})
+  ).data;
+
 export interface PositionEntry {
   id: string;
   ticker: string;
@@ -86,6 +96,22 @@ export interface PortfolioPosition {
   shares: number;
   unitAvgBuyPrice: number;
   unitCurrency: "USD" | "ILA" | "GBP" | "EUR";
+}
+
+export interface BootstrapStartPayload {
+  userId: string;
+  displayName?: string;
+  accounts: Record<string, PortfolioPosition[]>;
+  guidance: Record<string, PositionGuidance>;
+  schedule: {
+    dailyBriefTime: string;
+    weeklyResearchDay: string;
+    weeklyResearchTime: string;
+    timezone: string;
+  };
+  currency: "ILS";
+  transactionFeeILS: number;
+  note: string;
 }
 
 export const submitPortfolio = async (payload: {
@@ -113,4 +139,10 @@ export async function completePositionGuidance(payload: {
   guidance?: Record<string, PositionGuidance>;
 }): Promise<{ state: string; jobId?: string; message: string; guidanceStepPending: boolean }> {
   return (await apiClient.post("/onboard/position-guidance/complete", payload)).data;
+}
+
+export async function startBootstrap(
+  payload: BootstrapStartPayload
+): Promise<{ jobId: string; status: string; totalTickers: number }> {
+  return (await apiClient.post("/agents/bootstrap/start", payload)).data;
 }

@@ -1,4 +1,4 @@
--- Portfolio Assistant schema (idempotent).
+-- Startix schema (idempotent).
 -- Append new statements here; backend runs this file once on startup (see docs/ARCHITECTURE.md).
 -- Use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS so re-runs are safe.
 
@@ -899,3 +899,30 @@ CREATE TABLE IF NOT EXISTS orchestration_state (
   CONSTRAINT fk_orchestration_state_user FOREIGN KEY (user_id)
     REFERENCES users(user_id) ON DELETE CASCADE
 );
+
+-- ============================================================================
+-- Phase 8 DDL — DB-first feed, notifications, report index
+-- Replaces users/{id}/feed/events.json and users/{id}/feed/notifications.json
+-- (file-only paths removed; notification_preferences migrated off profile.json)
+-- ============================================================================
+
+-- §8.1 feed_events — replaces users/{id}/feed/events.json (market_news items).
+CREATE TABLE IF NOT EXISTS feed_events (
+  id         VARCHAR(64) PRIMARY KEY,
+  user_id    VARCHAR(64) NOT NULL,
+  kind       VARCHAR(32) NOT NULL DEFAULT 'market_news',
+  ticker     VARCHAR(32) NOT NULL,
+  title      TEXT NOT NULL,
+  summary    TEXT NOT NULL,
+  source     VARCHAR(128) NOT NULL,
+  url        TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_feed_events_user FOREIGN KEY (user_id)
+    REFERENCES users(user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_feed_events_user_created
+  ON feed_events (user_id, created_at DESC);
+
+-- §8.2 notification_preferences on users — replaces profile.json `notifications` field.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS notification_preferences JSONB NOT NULL DEFAULT '{}'::jsonb;

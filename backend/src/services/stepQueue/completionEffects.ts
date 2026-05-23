@@ -1,5 +1,3 @@
-import { promises as fs } from "fs";
-import path from "path";
 import type { DataSource } from "typeorm";
 import { buildWorkspace, type UserWorkspace } from "../../middleware/userIsolation.js";
 import { StrategySchema } from "../../schemas/index.js";
@@ -9,6 +7,7 @@ import { publishNotification } from "../notificationService.js";
 import { resolveConfiguredPath } from "../paths.js";
 import { upsertTrackedAsset } from "../trackedAssetService.js";
 import { putReportBatch } from "../reportIndexStore.js";
+import { promises as fs } from "fs";
 
 const USERS_DIR = resolveConfiguredPath(process.env["USERS_DIR"], "../users");
 const PRODUCT_EFFECTS_VERSION = 4;
@@ -83,73 +82,6 @@ async function readStrategySnapshot(ws: UserWorkspace, ticker: string): Promise<
   }
 }
 
-async function appendReportBatch(
-  ws: UserWorkspace,
-  batch: {
-    batchId: string;
-    mode: "full_report" | "deep_dive";
-    triggeredAt: string;
-    tickers: string[];
-    jobId: string;
-    entries: Record<string, Record<string, unknown>>;
-  }
-): Promise<void> {
-  const indexDir = path.join(ws.reportsDir, "index");
-  await fs.mkdir(indexDir, { recursive: true });
-
-  const metaPath = path.join(indexDir, "meta.json");
-  const pagePath = path.join(indexDir, "page-001.json");
-  let meta: {
-    totalBatches: number;
-    totalPages: number;
-    lastUpdated: string | null;
-    newestBatchId: string | null;
-    pageSize?: number;
-  } = {
-    totalBatches: 0,
-    totalPages: 1,
-    lastUpdated: null,
-    newestBatchId: null,
-    pageSize: 10,
-  };
-  try {
-    meta = JSON.parse(await fs.readFile(metaPath, "utf-8")) as typeof meta;
-  } catch {}
-
-  let page: {
-    page: number;
-    totalPages: number;
-    batches: Array<{ batchId: string } & Record<string, unknown>>;
-  } = {
-    page: 1,
-    totalPages: 1,
-    batches: [],
-  };
-  try {
-    page = JSON.parse(await fs.readFile(pagePath, "utf-8")) as typeof page;
-  } catch {}
-
-  page.batches = page.batches.filter((entry) => entry.batchId !== batch.batchId);
-  page.batches.unshift({
-    batchId: batch.batchId,
-    triggeredAt: batch.triggeredAt,
-    date: batch.triggeredAt.slice(0, 10),
-    mode: batch.mode,
-    tickers: batch.tickers,
-    tickerCount: batch.tickers.length,
-    jobId: batch.jobId,
-    entries: batch.entries,
-  });
-  page.batches = page.batches.slice(0, meta.pageSize ?? 10);
-
-  meta.totalBatches = Math.max(meta.totalBatches, page.batches.length);
-  meta.totalPages = 1;
-  meta.lastUpdated = batch.triggeredAt;
-  meta.newestBatchId = batch.batchId;
-
-  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
-  await fs.writeFile(pagePath, JSON.stringify(page, null, 2), "utf-8");
-}
 
 async function completedTickers(ds: DataSource, jobId: string): Promise<string[]> {
   const rows = await ds.query(
@@ -244,39 +176,21 @@ export async function applyStepQueueCompletionEffects(
 
   if (Object.keys(entries).length > 0) {
     const batchId = `batch_${job.id}_${job.action}`;
-    await appendReportBatch(ws, {
+    await putReportBatch({
       batchId,
+      userId: ws.userId,
+      jobId: job.id,
       mode: job.action,
       triggeredAt: completedAt,
-      tickers,
-      jobId: job.id,
-      entries,
+      date: completedAt.slice(0, 10),
+      summary: null,
+      highlights: null,
+      entries: tickers.map((ticker) => ({
+        ticker,
+        dailySection: null,
+        entry: entries[ticker] ?? {},
+      })),
     });
-
-    // Phase 1 dual-write to Postgres report_batches + report_index. Failures
-    // are logged but do not block the legacy JSON path.
-    try {
-      await putReportBatch({
-        batchId,
-        userId: ws.userId,
-        jobId: job.id,
-        mode: job.action,
-        triggeredAt: completedAt,
-        date: completedAt.slice(0, 10),
-        summary: null,
-        highlights: null,
-        entries: tickers.map((ticker) => ({
-          ticker,
-          dailySection: null,
-          entry: entries[ticker] ?? {},
-        })),
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.warn(
-        `report_batch_dual_write_failed user=${ws.userId} batch=${batchId} error=${message}`
-      );
-    }
 
     if (options.publishNotifications) {
       await publishNotification({

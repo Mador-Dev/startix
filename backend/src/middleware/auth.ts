@@ -1,23 +1,15 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
+import { getAuth } from "@clerk/express";
 import { validateSession } from "../services/impersonationService.js";
-import { getTokenVersion } from "../services/userStore.js";
 
-const JWT_SECRET  = process.env["JWT_SECRET"] ?? "changeme";
-const TOKEN_EXPIRY = "7d";
+const JWT_SECRET = process.env["JWT_SECRET"] ?? "changeme";
 
 export interface AuthenticatedRequest extends Request {
   userId?: string;
 }
 
-// Shape of a normal JWT payload
-interface NormalPayload {
-  userId: string;
-  tokenVersion?: number;
-}
-
-// Shape of an impersonation JWT payload
 interface ImpersonationPayload {
   userId: string;
   impersonatorId: string;
@@ -25,12 +17,22 @@ interface ImpersonationPayload {
   readOnly: true;
 }
 
-function isImpersonationPayload(p: NormalPayload | ImpersonationPayload): p is ImpersonationPayload {
-  return (
-    "impersonatorId" in p &&
-    "sessionId" in p &&
-    (p as ImpersonationPayload).readOnly === true
-  );
+function peekImpersonationPayload(token: string): ImpersonationPayload | null {
+  try {
+    const [, payloadB64] = token.split(".");
+    if (!payloadB64) return null;
+    const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString()) as Record<string, unknown>;
+    if (
+      typeof payload["impersonatorId"] === "string" &&
+      typeof payload["sessionId"] === "string" &&
+      payload["readOnly"] === true
+    ) {
+      return payload as unknown as ImpersonationPayload;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export function authMiddleware(
@@ -45,20 +47,18 @@ export function authMiddleware(
   }
 
   const token = authHeader.slice(7);
-  let payload: NormalPayload | ImpersonationPayload;
-  try {
-    payload = jwt.verify(token, JWT_SECRET) as NormalPayload | ImpersonationPayload;
-    if (!payload.userId) {
+
+  // Impersonation tokens are custom JWTs issued by this backend — detect by peeking at payload
+  const impersonationHint = peekImpersonationPayload(token);
+  if (impersonationHint) {
+    let payload: ImpersonationPayload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET) as ImpersonationPayload;
+    } catch {
       res.status(401).json({ error: "unauthorized" });
       return;
     }
-  } catch {
-    res.status(401).json({ error: "unauthorized" });
-    return;
-  }
 
-  // --- Impersonation token path ---
-  if (isImpersonationPayload(payload)) {
     const { impersonatorId, sessionId } = payload;
     validateSession(sessionId)
       .then((result) => {
@@ -78,25 +78,14 @@ export function authMiddleware(
     return;
   }
 
-  // --- Normal token path ---
-  getTokenVersion(payload.userId)
-    .then((storedVersion) => {
-      const tokenVersion = payload.tokenVersion ?? 0;
-      if (tokenVersion !== storedVersion) {
-        res.status(401).json({ error: "session_invalidated" });
-        return;
-      }
-      res.locals["userId"] = payload.userId;
-      next();
-    })
-    .catch(() => {
-      res.locals["userId"] = payload.userId;
-      next();
-    });
-}
-
-export function generateToken(userId: string, tokenVersion: number): string {
-  return jwt.sign({ userId, tokenVersion }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+  // Normal Clerk session token — clerkMiddleware() already verified it and attached auth to req
+  const { userId } = getAuth(req);
+  if (!userId) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  res.locals["userId"] = userId;
+  next();
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -105,4 +94,17 @@ export async function hashPassword(password: string): Promise<string> {
 
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
   return bcrypt.compare(password, hash);
+}
+
+// Still used by impersonationService to mint custom impersonation JWTs
+export function generateImpersonationToken(
+  userId: string,
+  impersonatorId: string,
+  sessionId: string
+): string {
+  return jwt.sign(
+    { userId, impersonatorId, sessionId, readOnly: true },
+    JWT_SECRET,
+    { expiresIn: "15m" }
+  );
 }

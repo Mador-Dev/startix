@@ -1,8 +1,6 @@
-import { promises as fs } from "fs";
-import path from "path";
 import { NotificationPreferencesSchema, type NotificationPreferences } from "../schemas/notifications.js";
-import { resolveConfiguredPath } from "./paths.js";
 import { logger } from "./logger.js";
+import { getApplicationDataSource, isApplicationDatabaseConfigured } from "../db/applicationDataSource.js";
 import { getStoredWhatsAppConnection, getUserChannelConnectivity } from "./channelService.js";
 import {
   composeNotification,
@@ -14,11 +12,12 @@ import {
 import {
   insertNotification as dbInsertNotification,
   updateDelivery as dbUpdateDelivery,
+  listNotifications as dbListNotifications,
+  markRead as dbMarkRead,
+  listByBatch as dbListByBatch,
 } from "./notificationStore.js";
-import { redactTelegramError, sendTelegramMessage } from "./telegramDelivery.js";
+import { sendTelegramMessage } from "./telegramDelivery.js";
 
-const USERS_DIR = resolveConfiguredPath(process.env["USERS_DIR"], "../users");
-const MAX_OUTBOX_ITEMS = 250;
 const WHATSAPP_GRAPH_VERSION = process.env["WHATSAPP_GRAPH_VERSION"] ?? "v17.0";
 
 const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = NotificationPreferencesSchema.parse({
@@ -35,48 +34,37 @@ const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = NotificationPr
   },
 });
 
-function profilePath(userId: string): string {
-  return path.join(USERS_DIR, userId, "profile.json");
-}
-
-function outboxPath(userId: string): string {
-  return path.join(USERS_DIR, userId, "feed", "notifications.json");
-}
-
 export async function getNotificationPreferences(
   userId: string
 ): Promise<NotificationPreferences> {
   const connectivity = await getUserChannelConnectivity(userId);
-  try {
-    const raw = await fs.readFile(profilePath(userId), "utf-8");
-    const parsed = JSON.parse(raw) as { notifications?: unknown };
-    const result = NotificationPreferencesSchema.safeParse(parsed.notifications);
-    const base = result.success ? result.data : DEFAULT_NOTIFICATION_PREFERENCES;
-    return {
-      ...base,
-      primaryChannel:
-        base.primaryChannel === "telegram" && !connectivity.telegram.connected
-          ? "web"
-          : base.primaryChannel === "whatsapp" && !connectivity.whatsapp.connected
-            ? "web"
-            : base.primaryChannel,
-      enabledChannels: {
-        ...base.enabledChannels,
-        telegram: base.enabledChannels.telegram && connectivity.telegram.connected,
-        whatsapp: base.enabledChannels.whatsapp && connectivity.whatsapp.connected,
-      },
-    };
-  } catch {
-    return {
-      ...DEFAULT_NOTIFICATION_PREFERENCES,
-      enabledChannels: {
-        ...DEFAULT_NOTIFICATION_PREFERENCES.enabledChannels,
-        telegram: connectivity.telegram.connected,
-        whatsapp: false,
-      },
-      primaryChannel: connectivity.telegram.connected ? "telegram" : "web",
-    };
+  let base = DEFAULT_NOTIFICATION_PREFERENCES;
+  if (isApplicationDatabaseConfigured()) {
+    try {
+      const ds = await getApplicationDataSource();
+      const rows = (await ds.query(
+        `SELECT notification_preferences FROM users WHERE user_id = $1`,
+        [userId]
+      )) as Array<{ notification_preferences: unknown }>;
+      const prefs = rows[0]?.notification_preferences;
+      if (prefs && typeof prefs === "object" && Object.keys(prefs as object).length > 0) {
+        const result = NotificationPreferencesSchema.safeParse(prefs);
+        if (result.success) base = result.data;
+      }
+    } catch {}
   }
+  return {
+    ...base,
+    primaryChannel:
+      base.primaryChannel === "telegram" && !connectivity.telegram.connected ? "web"
+      : base.primaryChannel === "whatsapp" && !connectivity.whatsapp.connected ? "web"
+      : base.primaryChannel,
+    enabledChannels: {
+      ...base.enabledChannels,
+      telegram: base.enabledChannels.telegram && connectivity.telegram.connected,
+      whatsapp: base.enabledChannels.whatsapp && connectivity.whatsapp.connected,
+    },
+  };
 }
 
 export async function setNotificationPreferences(
@@ -86,11 +74,9 @@ export async function setNotificationPreferences(
   const validated = NotificationPreferencesSchema.parse(preferences);
   const connectivity = await getUserChannelConnectivity(userId);
   const nextPrimaryChannel =
-    validated.primaryChannel === "telegram" && !connectivity.telegram.connected
-      ? "web"
-      : validated.primaryChannel === "whatsapp" && !connectivity.whatsapp.connected
-        ? "web"
-        : validated.primaryChannel;
+    validated.primaryChannel === "telegram" && !connectivity.telegram.connected ? "web"
+    : validated.primaryChannel === "whatsapp" && !connectivity.whatsapp.connected ? "web"
+    : validated.primaryChannel;
   const normalized = {
     ...validated,
     primaryChannel: nextPrimaryChannel,
@@ -101,14 +87,13 @@ export async function setNotificationPreferences(
     },
   } satisfies NotificationPreferences;
 
-  const target = profilePath(userId);
-  let profile: Record<string, unknown> = {};
-  try {
-    profile = JSON.parse(await fs.readFile(target, "utf-8")) as Record<string, unknown>;
-  } catch {}
-
-  profile["notifications"] = normalized;
-  await fs.writeFile(target, JSON.stringify(profile, null, 2), "utf-8");
+  if (isApplicationDatabaseConfigured()) {
+    const ds = await getApplicationDataSource();
+    await ds.query(
+      `UPDATE users SET notification_preferences = $1::jsonb WHERE user_id = $2`,
+      [JSON.stringify(normalized), userId]
+    );
+  }
   return normalized;
 }
 
@@ -136,12 +121,6 @@ function categoryEnabled(preferences: NotificationPreferences, category: Notific
   if (category === "daily_brief") return preferences.categories.dailyBriefs;
   if (category === "report") return preferences.categories.reportRuns;
   return preferences.categories.marketNews;
-}
-
-function redactLogMessage(value: unknown, maxLength = 180): string {
-  return redactTelegramError(value, maxLength)
-    .replace(/Bearer\s+\S+/gi, "Bearer <redacted>")
-    .slice(0, maxLength);
 }
 
 function logNotificationEvent(
@@ -176,59 +155,9 @@ function renderRecordContent(
   };
 }
 
-async function readOutbox(userId: string): Promise<NotificationEnvelope[]> {
-  try {
-    const raw = await fs.readFile(outboxPath(userId), "utf-8");
-    return JSON.parse(raw) as NotificationEnvelope[];
-  } catch {
-    return [];
-  }
-}
-
-async function writeOutbox(userId: string, items: NotificationEnvelope[]): Promise<void> {
-  const filePath = outboxPath(userId);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(items.slice(0, MAX_OUTBOX_ITEMS), null, 2), "utf-8");
-}
-
-async function appendOutboxRecord(record: NotificationEnvelope): Promise<void> {
-  const current = await readOutbox(record.userId);
-  await writeOutbox(record.userId, [record, ...current]);
-}
-
-async function updateOutboxRecord(
-  userId: string,
-  notificationId: string,
-  update: Partial<Pick<NotificationEnvelope, "delivered" | "deliveredAt" | "readAt" | "error">>
-): Promise<void> {
-  const current = await readOutbox(userId);
-  const next = current.map((item) => (item.id === notificationId ? { ...item, ...update } : item));
-  await writeOutbox(userId, next);
-}
-
-function readProfileTelegramTarget(value: unknown): { botToken: string; chatId: string } | null {
-  if (typeof value !== "object" || value === null) return null;
-  const connections = (value as { channelConnections?: unknown }).channelConnections;
-  if (typeof connections !== "object" || connections === null) return null;
-  const telegram = (connections as { telegram?: unknown }).telegram;
-  if (typeof telegram !== "object" || telegram === null) return null;
-  const botToken = (telegram as { botToken?: unknown }).botToken;
-  const chatId = (telegram as { chatId?: unknown }).chatId;
-  if (typeof botToken !== "string" || botToken.trim().length === 0) return null;
-  if (typeof chatId !== "string" || chatId.trim().length === 0) return null;
-  return { botToken, chatId };
-}
-
 async function getTelegramTarget(userId: string): Promise<{ botToken: string; chatId: string } | null> {
+  if (!isApplicationDatabaseConfigured()) return null;
   try {
-    const raw = await fs.readFile(profilePath(userId), "utf-8");
-    const profileTarget = readProfileTelegramTarget(JSON.parse(raw) as unknown);
-    if (profileTarget) return profileTarget;
-  } catch {}
-
-  try {
-    const { isApplicationDatabaseConfigured, getApplicationDataSource } = await import("../db/applicationDataSource.js");
-    if (!isApplicationDatabaseConfigured()) return null;
     const ds = await getApplicationDataSource();
     const [bindingRows, secretRows] = await Promise.all([
       ds.query(
@@ -355,9 +284,7 @@ export async function publishNotification(
   }
 
   if (composed.batchId) {
-    const existing = (await readOutbox(request.userId)).filter(
-      (item) => item.category === composed.category && item.batchId === composed.batchId
-    );
+    const existing = await dbListByBatch(request.userId, composed.batchId, composed.category);
     if (existing.length > 0) {
       logNotificationEvent("info", {
         decision: "duplicate_batch",
@@ -367,7 +294,7 @@ export async function publishNotification(
         batchId: composed.batchId,
         channels: existing.map((item) => item.channel),
       });
-      return existing;
+      return existing as NotificationEnvelope[];
     }
   }
 
@@ -375,7 +302,7 @@ export async function publishNotification(
   const candidateChannels = buildCandidateChannels(preferences, connectivity);
 
   const createdAt = new Date().toISOString();
-  const records = candidateChannels.map<NotificationEnvelope>((channel) => ({
+  const records: NotificationEnvelope[] = candidateChannels.map((channel) => ({
     id: `ntf_${Date.now()}_${channel}_${Math.random().toString(16).slice(2, 8)}`,
     userId: request.userId,
     createdAt,
@@ -390,96 +317,46 @@ export async function publishNotification(
   const deliveryOutcomes: string[] = [];
 
   for (const record of records) {
-    await appendOutboxRecord(record);
-
-    // Phase 1 dual-write to Postgres. Failures are logged but do not block
-    // the legacy JSON path which is still source of truth.
-    try {
-      await dbInsertNotification({
-        id: record.id,
-        userId: record.userId,
-        category: record.category,
-        channel: record.channel,
-        title: record.title,
-        body: record.body,
-        ticker: record.ticker,
-        batchId: record.batchId,
-        delivered: record.delivered,
-        deliveredAt: record.deliveredAt,
-        readAt: record.readAt,
-        error: record.error,
-      });
-    } catch (err) {
-      const message = redactLogMessage(err);
-      logNotificationEvent("warn", {
-        decision: "dual_write_failed",
-        userId: record.userId,
-        notificationId: record.id,
-        semanticKind: composed.kind,
-        category: record.category,
-        channel: record.channel,
-        batchId: record.batchId,
-        error: message,
-      });
-    }
+    await dbInsertNotification({
+      id: record.id,
+      userId: record.userId,
+      category: record.category,
+      channel: record.channel,
+      title: record.title,
+      body: record.body,
+      ticker: record.ticker,
+      batchId: record.batchId,
+      delivered: record.delivered,
+      deliveredAt: record.deliveredAt,
+      readAt: record.readAt,
+      error: record.error,
+    });
 
     if (record.channel === "telegram") {
       const result = await deliverTelegram(record);
       const deliveredAtIso = result.delivered ? new Date().toISOString() : null;
       deliveryOutcomes.push(`telegram:${result.delivered ? "delivered" : "failed"}:${result.attemptedChunks}`);
-      await updateOutboxRecord(record.userId, record.id, {
+      await dbUpdateDelivery(record.userId, record.id, {
         delivered: result.delivered,
         deliveredAt: deliveredAtIso,
         error: result.error,
       });
-      try {
-        await dbUpdateDelivery(record.userId, record.id, {
-          delivered: result.delivered,
-          deliveredAt: deliveredAtIso,
-          error: result.error,
-        });
-      } catch (err) {
-        const message = redactLogMessage(err);
-        logNotificationEvent("warn", {
-          decision: "dual_write_delivery_failed",
-          userId: record.userId,
-          notificationId: record.id,
-          semanticKind: composed.kind,
-          category: record.category,
-          channel: record.channel,
-          batchId: record.batchId,
-          error: message,
-        });
-      }
+      record.delivered = result.delivered;
+      record.deliveredAt = deliveredAtIso;
+      record.error = result.error;
     }
     if (record.channel === "whatsapp") {
       const result = await deliverWhatsApp(record);
       const deliveredAtIso = result.delivered ? new Date().toISOString() : null;
       deliveryOutcomes.push(`whatsapp:${result.delivered ? "delivered" : "failed"}`);
-      await updateOutboxRecord(record.userId, record.id, {
+      await dbUpdateDelivery(record.userId, record.id, {
         delivered: result.delivered,
         deliveredAt: deliveredAtIso,
         error: result.error,
       });
-      try {
-        await dbUpdateDelivery(record.userId, record.id, {
-          delivered: result.delivered,
-          deliveredAt: deliveredAtIso,
-          error: result.error,
-        });
-      } catch (err) {
-        const message = redactLogMessage(err);
-        logNotificationEvent("warn", {
-          decision: "dual_write_delivery_failed",
-          userId: record.userId,
-          notificationId: record.id,
-          semanticKind: composed.kind,
-          category: record.category,
-          channel: record.channel,
-          batchId: record.batchId,
-          error: message,
-        });
-      }
+      record.delivered = result.delivered;
+      record.deliveredAt = deliveredAtIso;
+      record.error = result.error;
     }
   }
 
@@ -499,28 +376,11 @@ export async function listNotifications(
   userId: string,
   options?: { limit?: number; channel?: NotificationEnvelope["channel"] | null; unreadOnly?: boolean }
 ): Promise<NotificationEnvelope[]> {
-  const items = await readOutbox(userId);
-  const filtered = items.filter((item) => {
-    if (options?.channel && item.channel !== options.channel) return false;
-    if (options?.unreadOnly && item.readAt !== null) return false;
-    return true;
-  });
-  return filtered.slice(0, options?.limit ?? 50);
+  return dbListNotifications(userId, options) as Promise<NotificationEnvelope[]>;
 }
 
 export async function markNotificationsRead(userId: string, ids: string[]): Promise<number> {
-  if (ids.length === 0) return 0;
-  const current = await readOutbox(userId);
-  const idSet = new Set(ids);
-  let updated = 0;
-  const now = new Date().toISOString();
-  const next = current.map((item) => {
-    if (!idSet.has(item.id) || item.readAt !== null) return item;
-    updated += 1;
-    return { ...item, readAt: now };
-  });
-  await writeOutbox(userId, next);
-  return updated;
+  return dbMarkRead(userId, ids);
 }
 
 export { DEFAULT_NOTIFICATION_PREFERENCES };

@@ -322,7 +322,7 @@ export function AddPositionModal({ open, onClose, onEditExisting, preferredAccou
               type="button"
               onClick={handleSubmit}
               disabled={!canSubmit}
-              className="flex-1 py-2.5 rounded-xl bg-[var(--color-accent-blue)] text-white text-xs font-bold disabled:opacity-40"
+              className="flex-1 py-2.5 rounded-xl bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-xs font-bold disabled:opacity-40"
             >
               {submitting ? "Adding…" : "Add Position"}
             </button>

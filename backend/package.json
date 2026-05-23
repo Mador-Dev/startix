@@ -1,7 +1,7 @@
 {
-  "name": "clawd-backend",
+  "name": "startix-backend",
   "version": "1.0.0",
-  "description": "ClaW d portfolio backend API",
+  "description": "Startix — agentic position strategy backend API",
   "main": "dist/server.js",
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
     "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
+    "@clerk/backend": "^3.4.13",
+    "@clerk/express": "^2.1.21",
     "@instructor-ai/instructor": "^1.7.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -18,6 +20,7 @@
     "express": "^5.0.1",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
+    "http-proxy-middleware": "^4.0.0",
     "jsonwebtoken": "^9.0.3",
     "node-cron": "^3.0.3",
     "openai": "^6.36.0",

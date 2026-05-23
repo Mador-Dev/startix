@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuthStore } from "../store/authStore";
+import { useClerk } from "@clerk/react";
 import { useToastStore } from "../store/toastStore";
 import { usePreferencesStore, type Theme } from "../store/preferencesStore";
 import { t, type TranslationKey } from "../store/i18n";
@@ -69,7 +69,7 @@ const sanitizePilotNotifications = (preferences?: NotificationPreferences): Noti
 export function Settings() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const logout = useAuthStore((s) => s.logout);
+  const { signOut } = useClerk();
   const showToast = useToastStore((s) => s.show);
   const lang = usePreferencesStore((s) => s.language);
   const currentTheme = usePreferencesStore((s) => s.theme);
@@ -116,8 +116,7 @@ export function Settings() {
   const [notificationsLoading, setNotificationsLoading] = useState(false);
 
   const handleLogout = () => {
-    logout();
-    navigate("/login");
+    void signOut(() => navigate("/login"));
   };
 
   const refreshOnboardStatus = async () => {
@@ -311,7 +310,7 @@ export function Settings() {
                   <button
                     onClick={handleSaveDisplayName}
                     disabled={displayNameLoading || !displayNameInput.trim()}
-                    className="flex-1 py-2 rounded-lg bg-[var(--color-accent-blue)] text-white text-xs font-bold disabled:opacity-50"
+                    className="flex-1 py-2 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-xs font-bold disabled:opacity-50"
                   >
                     {displayNameLoading ? "..." : t("save", lang)}
                   </button>
@@ -387,7 +386,7 @@ export function Settings() {
                 {passwordError && <p className="text-[10px] text-[var(--color-accent-red)]">{passwordError}</p>}
                 <div className="flex gap-2">
                   <button onClick={() => setShowPasswordForm(false)} className="flex-1 py-2 rounded-lg border border-[var(--color-border)] text-xs font-bold text-[var(--color-fg-muted)]">{t("cancel", lang)}</button>
-                  <button onClick={handleChangePassword} disabled={passwordLoading} className="flex-1 py-2 rounded-lg bg-[var(--color-accent-blue)] text-white text-xs font-bold disabled:opacity-50">
+                  <button onClick={handleChangePassword} disabled={passwordLoading} className="flex-1 py-2 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-xs font-bold disabled:opacity-50">
                     {passwordLoading ? "..." : t("save", lang)}
                   </button>
                 </div>
@@ -419,7 +418,7 @@ export function Settings() {
               </div>
               <button
                 onClick={() => setShowScheduleForm(true)}
-                className="w-full mt-2 py-2 rounded-lg border border-[var(--color-border)] text-xs font-bold text-[var(--color-accent-blue)]"
+                className="w-full mt-2 py-2 rounded-lg border border-[var(--color-border)] text-xs font-bold text-[var(--color-fg-default)]"
               >
                 {t("edit", lang)}
               </button>
@@ -460,7 +459,7 @@ export function Settings() {
               </div>
               <div className="flex gap-2">
                 <button onClick={() => setShowScheduleForm(false)} className="flex-1 py-2 rounded-lg border border-[var(--color-border)] text-xs font-bold text-[var(--color-fg-muted)]">{t("cancel", lang)}</button>
-                <button onClick={handleSaveSchedule} disabled={scheduleLoading} className="flex-1 py-2 rounded-lg bg-[var(--color-accent-blue)] text-white text-xs font-bold disabled:opacity-50">
+                <button onClick={handleSaveSchedule} disabled={scheduleLoading} className="flex-1 py-2 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-xs font-bold disabled:opacity-50">
                   {scheduleLoading ? "..." : t("save", lang)}
                 </button>
               </div>
@@ -495,7 +494,7 @@ export function Settings() {
                     setShowTelegramForm(true);
                   }}
                   disabled={telegramLoading}
-                  className="py-1.5 px-3 rounded-lg bg-[var(--color-accent-blue)] text-white text-xs font-bold"
+                  className="py-1.5 px-3 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-xs font-bold"
                 >
                   {telegramLoading ? "..." : telegramConnected ? t("disconnect", lang) : t("connect", lang)}
                 </button>
@@ -536,7 +535,7 @@ export function Settings() {
               {telegramError && <p className="text-[10px] text-[var(--color-accent-red)]">{telegramError}</p>}
               <div className="flex gap-2">
                 <button onClick={() => setShowTelegramForm(false)} className="flex-1 py-2 rounded-lg border border-[var(--color-border)] text-xs font-bold text-[var(--color-fg-muted)]">{t("cancel", lang)}</button>
-                <button onClick={handleConnectTelegram} disabled={telegramLoading} className="flex-1 py-2 rounded-lg bg-[var(--color-accent-blue)] text-white text-xs font-bold disabled:opacity-50">
+                <button onClick={handleConnectTelegram} disabled={telegramLoading} className="flex-1 py-2 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-xs font-bold disabled:opacity-50">
                   {telegramLoading ? "..." : t("connect", lang)}
                 </button>
               </div>
@@ -625,7 +624,7 @@ export function Settings() {
             <button
               onClick={handleSaveNotifications}
               disabled={notificationsLoading}
-              className="w-full rounded-lg bg-[var(--color-accent-blue)] px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
+              className="w-full rounded-lg bg-[var(--color-primary)] px-4 py-3 text-sm font-bold text-[var(--color-primary-fg)] disabled:opacity-60"
             >
               {notificationsLoading ? t("saving", lang) : t("save", lang)}
             </button>

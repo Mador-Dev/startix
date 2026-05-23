@@ -9,10 +9,6 @@ interface SetupBannerProps {
   telegramConnected: boolean;
 }
 
-/**
- * Setup-state banner — shown while state === "BOOTSTRAPPING" or UNINITIALIZED.
- * Honest about state (no fake attention items), shows live progress, channel-aware copy.
- */
 export function SetupBanner({
   analyzed,
   total,
@@ -38,19 +34,44 @@ export function SetupBanner({
       : null;
 
   return (
-    <div className="mx-4 mt-3 mb-1 px-4 py-3 rounded-xl border border-[var(--color-accent-blue)]/30 bg-[color-mix(in_srgb,var(--color-accent-blue)_8%,transparent)]">
-      <div className="flex items-center gap-2 mb-1">
+    <div
+      style={{
+        margin: "12px 16px 4px",
+        padding: "12px 16px",
+        borderRadius: 12,
+        border: "0.5px solid var(--color-info-border)",
+        background: "var(--color-info-tint)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <Loader2
-          size={16}
-          className="animate-spin text-[var(--color-accent-blue)] shrink-0"
+          size={15}
+          className="animate-spin"
+          style={{ color: "var(--color-info)", flexShrink: 0 }}
         />
-        <h2 className="text-sm font-bold text-[var(--color-fg-default)]">
+        <h2
+          style={{
+            margin: 0,
+            fontSize: 13,
+            fontWeight: 700,
+            color: "var(--text-primary)",
+          }}
+        >
           {t("setupBannerTitle", language)}
         </h2>
       </div>
-      <p className="text-xs text-[var(--color-fg-muted)] mb-1">{body}</p>
+      <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+        {body}
+      </p>
       {(progress || inProgress) && (
-        <p className="text-[11px] text-[var(--color-fg-subtle)] tabular-nums">
+        <p
+          style={{
+            margin: "4px 0 0",
+            fontSize: 11,
+            color: "var(--text-tertiary)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
           {progress}
           {progress && inProgress ? <> · {inProgress}</> : inProgress}
         </p>

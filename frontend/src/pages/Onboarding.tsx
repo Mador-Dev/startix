@@ -1,21 +1,23 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { TickerSearch } from "../components/ui/TickerSearch";
+import { searchTicker } from "../api/search";
 import type { TickerSelection } from "../types/api";
 import { useNavigate } from "react-router-dom";
-import { useAuthStore } from "../store/authStore";
+import { useAuth } from "@clerk/react";
 import { useToastStore } from "../store/toastStore";
 import { usePreferencesStore } from "../store/preferencesStore";
 import {
   completePositionGuidance,
   fetchOnboardStatus,
   fetchPositionGuidance,
+  provisionAccount,
+  startBootstrap,
   submitOnboardInit,
   submitPortfolio,
   type PositionEntry,
+  type PortfolioPosition,
 } from "../api/onboarding";
-import { triggerJob } from "../api/jobs";
-import { login } from "../api/auth";
 import { generateId } from "../utils/id";
 import { apiClient } from "../api/client";
 import { t } from "../store/i18n";
@@ -31,6 +33,25 @@ const EXCHANGES = [
 ] as const;
 
 type Currency = "USD" | "ILA" | "GBP" | "EUR";
+
+function formatUnitPrice(amount: string, currency: Currency): string {
+  const n = Number(amount);
+  if (!amount || Number.isNaN(n)) return "—";
+  const sym =
+    currency === "ILA" ? "₪" :
+    currency === "GBP" ? "£" :
+    currency === "EUR" ? "€" : "$";
+  return `${sym}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+async function resolveMarketPrice(selection: TickerSelection): Promise<number | null> {
+  if (selection.price != null && selection.price > 0) return selection.price;
+  const { results } = await searchTicker(selection.symbol);
+  const match =
+    results.find((r) => r.symbol.toUpperCase() === selection.symbol.toUpperCase()) ??
+    results[0];
+  return match?.price != null && match.price > 0 ? match.price : null;
+}
 
 const GUIDANCE_LIMITS = {
   thesis: 400,
@@ -92,7 +113,7 @@ function ProgressDots({ step, total }: { step: number; total: number }) {
         <div key={s} className="flex items-center gap-2">
           <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
             s < step ? "bg-[var(--color-accent-green)] text-white"
-            : s === step ? "bg-[var(--color-accent-blue)] text-white"
+            : s === step ? "bg-[var(--color-primary)] text-[var(--color-primary-fg)]"
             : "border border-[var(--color-border)] text-[var(--color-fg-subtle)]"
           }`}>{s < step ? "✓" : s}</div>
           {s < total && <div className={`w-6 h-0.5 ${s < step ? "bg-[var(--color-accent-green)]" : "bg-[var(--color-border)]"}`} />}
@@ -107,12 +128,12 @@ function BottomBar({ onBack, onNext, nextLabel, nextDisabled = false, showBack =
 }) {
   const language = usePreferencesStore((s) => s.language);
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-[var(--color-bg-subtle)] border-t border-[var(--color-border)] p-4 flex gap-3 safe-bottom z-30">
+    <div className="px-5 py-4 flex gap-3 border-t border-[var(--color-border)]">
       {showBack ? (
         <button onClick={onBack} className="flex-1 py-3 rounded-lg border border-[var(--color-border)] text-sm font-bold text-[var(--color-fg-muted)]">{t("back", language)}</button>
       ) : <div className="flex-1" />}
       <button onClick={onNext} disabled={nextDisabled}
-        className="flex-1 py-3 rounded-lg bg-[var(--color-accent-blue)] text-white text-sm font-bold disabled:opacity-50">
+        className="flex-1 py-3 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-sm font-bold disabled:opacity-50">
         {nextLabel ?? t("next", language)}
       </button>
     </div>
@@ -121,7 +142,7 @@ function BottomBar({ onBack, onNext, nextLabel, nextDisabled = false, showBack =
 
 function StepTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <div className="px-4 mb-2">
+    <div className="px-5 mb-2">
       <h2 className="text-base font-bold text-[var(--color-fg-default)]">{title}</h2>
       {subtitle && <p className="text-xs text-[var(--color-fg-muted)] mt-0.5">{subtitle}</p>}
     </div>
@@ -156,8 +177,8 @@ function Step1({ state, update, onNext }: { state: OnboardingState; update: <K e
   };
 
   return (
-    <>
-      <div className="px-4 space-y-4 flex-1 overflow-y-auto pb-36">
+    <div className="flex flex-col flex-1">
+      <div className="px-5 space-y-5 flex-1 overflow-y-auto py-4">
         <StepTitle title={t("onboardStep1Title", language)} subtitle={t("onboardStep1Sub", language)} />
         <div>
           <label className={labelCls}>{t("onboardAdminKey", language)}</label>
@@ -187,7 +208,7 @@ function Step1({ state, update, onNext }: { state: OnboardingState; update: <K e
         </div>
       </div>
       <BottomBar onNext={handleNext} showBack={false} />
-    </>
+    </div>
   );
 }
 
@@ -234,8 +255,8 @@ function AuthStep1({ state, update, onNext }: { state: OnboardingState; update: 
   };
 
   return (
-    <>
-      <div className="px-4 space-y-4 flex-1 overflow-y-auto pb-36">
+    <div className="flex flex-col flex-1">
+      <div className="px-5 space-y-5 flex-1 overflow-y-auto py-4">
         <StepTitle title={t("onboardSetPasswordTitle", language)} subtitle={t("onboardSetPasswordSub", language)} />
         <div>
           <label className={labelCls}>{t("currentPassword", language)}</label>
@@ -259,9 +280,11 @@ function AuthStep1({ state, update, onNext }: { state: OnboardingState; update: 
         nextDisabled={loading}
         showBack={false}
       />
-    </>
+    </div>
   );
 }
+
+void AuthStep1;
 
 // ---- Position Card ----
 function PositionCard({
@@ -280,11 +303,13 @@ function PositionCard({
       exchange: pos.exchange as TickerSelection["exchange"],
       exchDisp: pos.exchange,
       flag: "",
-      price: null,
+      price: pos.avgPrice ? Number(pos.avgPrice) : null,
       currency: "USD",
       assetType: "stock",
     } : null
   );
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [priceError, setPriceError] = useState(false);
 
   const acc = accounts.find((a) => a.id === accountName)!;
 
@@ -299,12 +324,36 @@ function PositionCard({
     updateAccount(accountName, { ...acc, positions: acc.positions.filter((_, i) => i !== idx) });
   };
 
+  const applyMarketPrice = async (val: TickerSelection) => {
+    setPriceLoading(true);
+    setPriceError(false);
+    try {
+      const price = await resolveMarketPrice(val);
+      if (price == null) {
+        setPriceError(true);
+        updatePos({ avgPrice: "" });
+        return;
+      }
+      const enriched = { ...val, price };
+      setTickerSelection(enriched);
+      updatePos({ avgPrice: String(price) });
+    } catch {
+      setPriceError(true);
+      updatePos({ avgPrice: "" });
+    } finally {
+      setPriceLoading(false);
+    }
+  };
+
   const handleTickerChange = (val: TickerSelection | null) => {
     setTickerSelection(val);
+    setPriceError(false);
     if (val) {
-      updatePos({ ticker: val.symbol, exchange: val.exchange });
+      updatePos({ ticker: val.symbol, exchange: val.exchange, avgPrice: "" });
+      void applyMarketPrice(val);
     } else {
-      updatePos({ ticker: "", exchange: "NYSE" });
+      setPriceLoading(false);
+      updatePos({ ticker: "", exchange: "NYSE", avgPrice: "" });
     }
   };
 
@@ -331,10 +380,32 @@ function PositionCard({
           )}
         </div>
         <div>
-          <label className={labelCls}>{t("onboardAvgPriceLabel", language)} ({pos.currency})</label>
-          <input type="number" value={pos.avgPrice} onChange={(e) => updatePos({ avgPrice: e.target.value })} min="0.01" step="0.01" placeholder="150.00" className={inputCls} />
-          {errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`] && (
-            <p className={errorCls}>{errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`]}</p>
+          <label className={labelCls}>{t("onboardAvgPriceLabel", language)}</label>
+          <div
+            className={`${inputCls} flex items-center justify-between gap-2 min-h-[42px] ${
+              priceError ? "border-[var(--color-accent-red)]" : ""
+            }`}
+            aria-live="polite"
+          >
+            {priceLoading ? (
+              <span className="text-xs text-[var(--color-fg-muted)]">{t("onboardPriceFetching", language)}</span>
+            ) : pos.avgPrice ? (
+              <>
+                <span className="text-sm font-bold tabular-nums text-[var(--color-fg-default)]">
+                  {formatUnitPrice(pos.avgPrice, pos.currency)}
+                </span>
+                <span className="text-[10px] text-[var(--color-fg-subtle)]">{t("onboardMarketPriceHint", language)}</span>
+              </>
+            ) : (
+              <span className="text-xs text-[var(--color-fg-muted)]">—</span>
+            )}
+          </div>
+          {(priceError || errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`]) && (
+            <p className={errorCls}>
+              {priceError
+                ? t("onboardPriceUnavailable", language)
+                : errors[`p_${accounts.findIndex((a) => a.id === accountName)}_${idx}`]}
+            </p>
           )}
         </div>
       </div>
@@ -411,7 +482,7 @@ function AccountSection({
           <PositionCard key={pos.id} pos={pos} idx={idx} accountName={account.id} accounts={accounts} updateAccount={updateAccount} errors={errors} />
         ))}
         <button onClick={addPosition}
-          className="w-full py-2 rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--color-accent-blue)] font-medium">
+          className="w-full py-2 rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--text-secondary)] font-medium">
           {t("onboardAddPosition", language)}
         </button>
       </div>
@@ -471,8 +542,8 @@ function StepPortfolio({
   };
 
   return (
-    <>
-      <div className="px-4 space-y-4 flex-1 overflow-y-auto pb-36">
+    <div className="flex flex-col flex-1">
+      <div className="px-5 space-y-5 flex-1 overflow-y-auto py-4">
         <StepTitle title={t("onboardStep4Title", language)} subtitle={t("onboardStep4Sub", language)} />
         {errors.positions && <p className="text-[10px] text-[var(--color-accent-red)]">{errors.positions}</p>}
         {state.accounts.map((account) => (
@@ -487,12 +558,12 @@ function StepPortfolio({
           />
         ))}
         <button onClick={addAccount}
-          className="w-full py-3 rounded-lg border border-dashed border-[var(--color-border)] text-sm text-[var(--color-accent-blue)] font-medium">
+          className="w-full py-3 rounded-lg border border-dashed border-[var(--color-border)] text-sm text-[var(--text-secondary)] font-medium">
           {t("onboardAddAccount", language)}
         </button>
       </div>
       <BottomBar onBack={onBack} onNext={handleNext} nextLabel={t("onboardReview", language)} showBack={!!onBack} />
-    </>
+    </div>
   );
 }
 
@@ -504,9 +575,8 @@ function StepConfirm({ state }: { state: OnboardingState }) {
   const accLabel = state.accounts.length === 1 ? t("onboardAccountSingular", language) : t("accounts", language).toLowerCase();
 
   return (
-    <>
-      <div className="px-4 space-y-4 flex-1 overflow-y-auto pb-36">
-        <StepTitle title={t("onboardStep5Title", language)} subtitle={t("onboardStep5Sub", language)} />
+    <div className="px-5 space-y-5 flex-1 overflow-y-auto py-4">
+      <StepTitle title={t("onboardStep5Title", language)} subtitle={t("onboardStep5Sub", language)} />
         <div className="bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-lg p-4 space-y-3">
           {state.userId && (
             <div>
@@ -542,8 +612,7 @@ function StepConfirm({ state }: { state: OnboardingState }) {
             ))}
           </div>
         </div>
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -659,8 +728,8 @@ function StepGuidance({
 }) {
   const language = usePreferencesStore((s) => s.language);
   return (
-    <>
-      <div className="px-4 space-y-4 flex-1 overflow-y-auto pb-36">
+    <div className="flex flex-col flex-1">
+      <div className="px-5 space-y-5 flex-1 overflow-y-auto py-4">
         <StepTitle
           title={t("onboardStep6Title", language)}
           subtitle={t("onboardStep6Sub", language)}
@@ -689,32 +758,36 @@ function StepGuidance({
           />
         ))}
       </div>
-      <div className="fixed bottom-0 left-0 right-0 bg-[var(--color-bg-subtle)] border-t border-[var(--color-border)] p-4 flex gap-3 safe-bottom z-30">
+      <div className="px-5 py-4 flex gap-3 border-t border-[var(--color-border)]">
         <button onClick={onBack} className="flex-1 py-3 rounded-lg border border-[var(--color-border)] text-sm font-bold text-[var(--color-fg-muted)]">
           {t("back", language)}
         </button>
         <button onClick={onSkip} disabled={submitting} className="flex-1 py-3 rounded-lg border border-[var(--color-border)] text-sm font-bold text-[var(--color-fg-muted)] disabled:opacity-50">
           {t("onboardSkip", language)}
         </button>
-        <button onClick={onLaunch} disabled={submitting} className="flex-1 py-3 rounded-lg bg-[var(--color-accent-blue)] text-white text-sm font-bold disabled:opacity-50">
+        <button onClick={onLaunch} disabled={submitting} className="flex-1 py-3 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-fg)] text-sm font-bold disabled:opacity-50">
           {submitting ? t("onboardLaunching", language) : t("onboardLaunchBtn", language)}
         </button>
       </div>
-    </>
+    </div>
   );
 }
 
 // ---- Main Component ----
 export function Onboarding() {
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const loginStore = useAuthStore((s) => s.login);
+  const { userId: clerkUserId } = useAuth();
+  // Start optimistically as a new user (step 2 visible immediately).
+  // The status check below updates this and may jump to step 4 or redirect.
+  const [backendWorkspaceReady, setBackendWorkspaceReady] = useState<boolean | null>(false);
   const showToast = useToastStore((s) => s.show);
   const language = usePreferencesStore((s) => s.language);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // Skip step 1 (account creation) for Clerk users — they're already authenticated.
   const [state, setState] = useState<OnboardingState>({
     ...initialState,
+    step: 2,
     accounts: [],
   });
 
@@ -723,32 +796,40 @@ export function Onboarding() {
   const [launchingGuidance, setLaunchingGuidance] = useState(false);
   const [launchError, setLaunchError] = useState("");
 
-  // If authenticated and guidance is pending, jump straight to guidance step
+  // On mount: check if backend workspace exists to determine new-user vs returning-user flow
   useEffect(() => {
-    if (!isAuthenticated) return;
-
     let cancelled = false;
     void (async () => {
       try {
         const status = await fetchOnboardStatus();
-        if (!status.portfolioLoaded || !status.guidanceStepPending) return;
-        const guidanceData = await fetchPositionGuidance();
         if (cancelled) return;
-        setState((current) => ({
-          ...current,
-          step: 4,
-          guidanceTickers: guidanceData.tickers,
-          positionGuidance: Object.fromEntries(
-            Object.entries(guidanceData.guidance).map(([ticker, guidance]) => [ticker, { ...guidance }])
-          ),
-        }));
-      } catch (err) {
-        console.error("[Onboarding] Failed to load pending guidance:", err);
+        setBackendWorkspaceReady(true);
+        if (status.portfolioLoaded && status.guidanceStepPending) {
+          const guidanceData = await fetchPositionGuidance();
+          if (cancelled) return;
+          setState((current) => ({
+            ...current,
+            step: 4,
+            guidanceTickers: guidanceData.tickers,
+            positionGuidance: Object.fromEntries(
+              Object.entries(guidanceData.guidance).map(([ticker, g]) => [ticker, { ...g }])
+            ),
+          }));
+        } else if (status.portfolioLoaded) {
+          // Already fully onboarded — redirect away
+          navigate("/portfolio", { replace: true });
+        }
+        // else: workspace exists but portfolio not submitted yet — stay at step 2
+      } catch {
+        if (cancelled) return;
+        // Error means no workspace yet — stay at step 2 as new user
+        setBackendWorkspaceReady(false);
       }
     })();
 
     return () => { cancelled = true; };
-  }, [isAuthenticated]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const update = <K extends keyof OnboardingState>(k: K, v: OnboardingState[K]) => {
     setState((s) => ({ ...s, [k]: v }));
@@ -814,17 +895,29 @@ export function Onboarding() {
     setLaunchingGuidance(true);
     setLaunchError("");
     try {
+      const guidancePayload = skip ? {} : buildGuidancePayload();
       await completePositionGuidance({
         skip,
-        guidance: skip ? {} : buildGuidancePayload(),
+        guidance: guidancePayload,
       });
-      // Kick off the initial full-report analysis on the agents service.
-      // Non-fatal: if agents is unavailable the user can re-trigger from the portfolio page.
-      try {
-        await triggerJob("full_report");
-      } catch (agentsErr) {
-        console.warn("[Onboarding] agents job trigger failed (non-fatal):", agentsErr);
+      const userId = clerkUserId?.trim();
+      if (!userId) {
+        throw new Error("Authenticated user ID is missing.");
       }
+      const accountsPayload = buildAccountsPayload();
+      if (Object.keys(accountsPayload).length === 0) {
+        throw new Error("Please add at least one position before launching bootstrap.");
+      }
+      await startBootstrap({
+        userId,
+        displayName: state.displayName.trim() || undefined,
+        accounts: accountsPayload,
+        guidance: guidancePayload,
+        schedule: defaultSchedule,
+        currency: "ILS",
+        transactionFeeILS: 0,
+        note: "",
+      });
       await queryClient.invalidateQueries({ queryKey: ["onboard-status"] });
       await queryClient.refetchQueries({ queryKey: ["onboard-status"], type: "active" });
       navigate("/portfolio", { replace: true });
@@ -878,6 +971,22 @@ export function Onboarding() {
     timezone: "Asia/Jerusalem",
   };
 
+  const buildAccountsPayload = (): Record<string, PortfolioPosition[]> => {
+    const accountsPayload: Record<string, PortfolioPosition[]> = {};
+    for (const acc of state.accounts) {
+      const positions = acc.positions.filter((p) => p.ticker.trim().length > 0);
+      if (positions.length === 0) continue;
+      accountsPayload[acc.name] = positions.map((p) => ({
+        ticker: p.ticker.trim().toUpperCase(),
+        exchange: p.exchange,
+        shares: Math.max(1, Math.round(Number(p.shares))),
+        unitAvgBuyPrice: Number(p.avgPrice),
+        unitCurrency: p.currency,
+      }));
+    }
+    return accountsPayload;
+  };
+
   // handleSubmit: called from the Confirm step to finalize portfolio and launch
   const handleSubmit = async () => {
     if (submittingPortfolio) return;
@@ -885,47 +994,31 @@ export function Onboarding() {
     setSubmitError("");
 
     try {
-      const accountsPayload: Record<string, Array<{ ticker: string; exchange: string; shares: number; unitAvgBuyPrice: number; unitCurrency: string }>> = {};
-      for (const acc of state.accounts) {
-        const positions = acc.positions.filter((p) => p.ticker.trim().length > 0);
-        if (positions.length === 0) continue;
-        accountsPayload[acc.name] = positions.map((p) => ({
-          ticker: p.ticker.trim().toUpperCase(),
-          exchange: p.exchange,
-          shares: Math.max(1, Math.round(Number(p.shares))),
-          unitAvgBuyPrice: Number(p.avgPrice),
-          unitCurrency: p.currency,
-        }));
-      }
+      const accountsPayload = buildAccountsPayload();
 
       if (Object.keys(accountsPayload).length === 0) {
         throw new Error("Please add at least one position before continuing.");
       }
 
-      if (isAuthenticated) {
-        await submitPortfolio({
-          meta: { currency: "ILS", transactionFeeILS: 0, note: "" },
-          accounts: accountsPayload as Record<string, import("../api/onboarding").PortfolioPosition[]>,
-          schedule: defaultSchedule,
-        });
-      } else {
-        // New user: create account, login, then submit portfolio
-        const initPayload = {
-          userId: state.userId,
-          password: state.password,
-          displayName: state.displayName,
-          telegramChatId: "",
-          schedule: defaultSchedule,
-        };
-        await submitOnboardInit(initPayload, state.adminKey);
-        const loginData = await login(state.userId, state.password);
-        loginStore(loginData.token, loginData.userId);
-        await submitPortfolio({
-          meta: { currency: "ILS", transactionFeeILS: 0, note: "" },
-          accounts: accountsPayload as Record<string, import("../api/onboarding").PortfolioPosition[]>,
-          schedule: defaultSchedule,
-        });
+      if (!backendWorkspaceReady) {
+        // New user: provision Postgres workspace (Clerk) or admin-init (legacy).
+        if (clerkUserId) {
+          await provisionAccount(state.displayName.trim() || undefined);
+        } else {
+          const initPayload = {
+            userId: state.userId,
+            displayName: state.displayName,
+            telegramChatId: "",
+            schedule: defaultSchedule,
+          };
+          await submitOnboardInit(initPayload, state.adminKey);
+        }
       }
+      await submitPortfolio({
+        meta: { currency: "ILS", transactionFeeILS: 0, note: "" },
+        accounts: accountsPayload,
+        schedule: defaultSchedule,
+      });
 
       // Advance to guidance step
       setState((current) => ({
@@ -952,20 +1045,27 @@ export function Onboarding() {
   // Total steps: 3 for new users (account → portfolio → confirm), then guidance step
   // For authenticated users: 2 steps (password → portfolio → confirm), then guidance
   // We show 3 dots for all (password-change, portfolio, confirm) and add a 4th if guidance
-  const isNewUser = !isAuthenticated;
-  const totalSteps = state.step === 4 ? 4 : (isNewUser ? 3 : 3);
+  const isNewUser = backendWorkspaceReady === false;
+  const totalSteps = state.step === 4 ? 4 : 3;
 
   return (
     <div className="bg-[var(--color-bg-base)] min-h-screen flex flex-col">
       <div className="safe-top" />
-      <ProgressDots step={state.step} total={totalSteps} />
-      <div className="flex-1 flex flex-col">
-        {/* Step 1: Account setup (new user) or change password (authenticated) */}
-        {state.step === 1 && !isAuthenticated && (
+      <div className="w-full max-w-sm mx-auto flex-1 flex flex-col">
+        <div style={{ display: "flex", justifyContent: "center", paddingTop: 24, paddingBottom: 4 }}>
+          <img
+            src="/startix-mark-64.png"
+            alt="Startix"
+            width={40}
+            height={40}
+            style={{ borderRadius: 10 }}
+          />
+        </div>
+        <ProgressDots step={state.step} total={totalSteps} />
+        <div className="flex-1 flex flex-col">
+        {/* Step 1: Account setup — only shown for new users (no backend workspace yet) */}
+        {state.step === 1 && isNewUser && (
           <Step1 state={state} update={update} onNext={() => update("step", 2)} />
-        )}
-        {state.step === 1 && isAuthenticated && (
-          <AuthStep1 state={state} update={update} onNext={() => update("step", 2)} />
         )}
 
         {/* Step 2: Portfolio entry */}
@@ -980,10 +1080,10 @@ export function Onboarding() {
 
         {/* Step 3: Confirm & Launch */}
         {state.step === 3 && (
-          <>
+          <div className="flex flex-col flex-1">
             <StepConfirm state={state} />
             {submitError && (
-              <div className="px-4 pb-2">
+              <div className="px-5 pb-2">
                 <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
                   <p className="text-xs text-[var(--color-accent-red)] font-medium">Setup failed</p>
                   <p className="text-[11px] text-[var(--color-accent-red)] mt-1">{submitError}</p>
@@ -997,7 +1097,7 @@ export function Onboarding() {
               nextDisabled={submittingPortfolio}
               showBack={true}
             />
-          </>
+          </div>
         )}
 
         {/* Step 4: Position Guidance */}
@@ -1013,6 +1113,7 @@ export function Onboarding() {
             launchError={launchError}
           />
         )}
+        </div>
       </div>
     </div>
   );

@@ -1,8 +1,7 @@
-// frontend/src/pages/SuspensionPage.tsx
-import { useAuthStore } from "../store/authStore";
+import { useClerk } from "@clerk/react";
 
 export function SuspensionPage({ reason }: { reason: string }) {
-  const logout = useAuthStore((s) => s.logout);
+  const { signOut } = useClerk();
 
   return (
     <div
@@ -40,7 +39,7 @@ export function SuspensionPage({ reason }: { reason: string }) {
 
       {/* Logout */}
       <button
-        onClick={logout}
+        onClick={() => void signOut()}
         className="px-6 py-2.5 rounded-lg text-sm font-bold"
         style={{
           background: "rgba(239,68,68,0.12)",

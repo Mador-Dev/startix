@@ -32,7 +32,7 @@ import {
 } from "../services/controlService.js";
 import { updateJob, listJobs, getJob } from "../services/jobService.js";
 import { buildWorkspace } from "../middleware/userIsolation.js";
-import type { JobAction, Job } from "../types/index.js";
+import type { JobAction } from "../types/index.js";
 import { connectUserTelegramChannel } from "../services/channelService.js";
 import { listSupportMessages, updateSupportMessageStatus } from "../services/supportService.js";
 import { getActiveUserEligibility } from "../services/stateService.js";
@@ -1344,18 +1344,20 @@ router.patch(
       res.status(400).json({ error: "Invalid action" });
       return;
     }
-    // Update job file
-    const updated: Job = {
-      ...job,
-      action: (action as JobAction | undefined) ?? job.action,
-      ticker: ticker !== undefined ? (ticker || null) : job.ticker,
-    };
-    await fs.writeFile(ws.jobFile(jobId), JSON.stringify(updated, null, 2), "utf-8");
-    // Update trigger file if it still exists
-    const triggerPath = path.join(ws.triggersDir, `${jobId}.json`);
-    try {
-      await fs.writeFile(triggerPath, JSON.stringify(updated, null, 2), "utf-8");
-    } catch { /* trigger already consumed — that's fine */ }
+    const ds = await getApplicationDataSource();
+    if (action) {
+      await ds.query(
+        `UPDATE jobs SET action = $1 WHERE id = $2 AND user_id = $3`,
+        [action, jobId, userId]
+      );
+    }
+    if (ticker !== undefined) {
+      await ds.query(
+        `UPDATE ticker_work_items SET ticker = $1 WHERE job_id = $2 AND user_id = $3`,
+        [ticker || null, jobId, userId]
+      );
+    }
+    const updated = await getJob(ws, jobId);
     res.json({ job: updated });
   })
 );
@@ -1367,8 +1369,6 @@ router.delete(
     const { userId, jobId } = req.params as { userId: string; jobId: string };
     if (!userId || !jobId) { res.status(400).json({ error: "userId and jobId required" }); return; }
     const ws = buildWorkspace(userId, USERS_DIR);
-    // Remove trigger file (prevents pickup if still pending)
-    try { await fs.unlink(path.join(ws.triggersDir, `${jobId}.json`)); } catch { /* ok */ }
     const existing = await getJob(ws, jobId);
     const job = existing.action === "deep_dive"
       ? await markDeepDiveJobCancelled(ws, existing, "Cancelled by admin")

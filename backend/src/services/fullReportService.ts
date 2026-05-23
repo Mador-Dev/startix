@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import type { UserWorkspace } from "../middleware/userIsolation.js";
 import type { Job, JsonValue, Confidence, Verdict } from "../types/index.js";
-import { validateReportFile, validateStrategyFile } from "./validationService.js";
+import { validateStrategyFile } from "./validationService.js";
 import { updateJob } from "./jobService.js";
 import { publishNotification } from "./notificationService.js";
 import {
@@ -17,6 +17,7 @@ import { StrategySchema } from "../schemas/index.js";
 import { dualWriteStrategy } from "./strategyExportService.js";
 import { readReportArtifact } from "./reportArtifactStore.js";
 import { readWorkspaceJson, writeWorkspaceJson } from "./workspaceDataIO.js";
+import { putReportBatch } from "./reportIndexStore.js";
 
 const FULL_REPORT_STEPS = [
   {
@@ -116,6 +117,7 @@ async function scanTicker(
   strategyInvalidTerminal: boolean;
   failureReason: string | null;
 }> {
+  const cutoff = new Date(triggeredAt).getTime();
   let completedSteps = 0;
   let currentStep: string | null = null;
 
@@ -343,20 +345,28 @@ async function appendFullReportBatch(
   job: Job,
   tickers: string[]
 ): Promise<void> {
-  const indexDir = path.join(ws.reportsDir, "index");
-  await fs.mkdir(indexDir, { recursive: true });
   const batchId = `batch_${job.id}_full_report`;
+  const triggeredAt = job.completed_at ?? job.triggered_at;
 
-  const entries = Object.fromEntries(
-    (
-      await Promise.all(
-        tickers.map(async (ticker) => [ticker, await readStrategySnapshot(ws, ticker)] as const)
-      )
-    )
-      .filter((entry) => entry[1] !== null)
-      .map(([ticker, strategy]) => [
+  const entriesWithStrategies = await Promise.all(
+    tickers.map(async (ticker) => ({ ticker, strategy: await readStrategySnapshot(ws, ticker) }))
+  );
+
+  await putReportBatch({
+    batchId,
+    userId: ws.userId,
+    jobId: job.id,
+    mode: "full_report",
+    triggeredAt,
+    date: triggeredAt.slice(0, 10),
+    summary: null,
+    highlights: null,
+    entries: entriesWithStrategies
+      .filter((e) => e.strategy !== null)
+      .map(({ ticker, strategy }) => ({
         ticker,
-        {
+        dailySection: null,
+        entry: {
           ticker,
           mode: "full_report",
           verdict: strategy!.verdict,
@@ -367,61 +377,8 @@ async function appendFullReportBatch(
           hasBullCase: false,
           hasBearCase: false,
         },
-      ])
-  );
-
-  const metaPath = path.join(indexDir, "meta.json");
-  const pagePath = path.join(indexDir, "page-001.json");
-  let meta: {
-    totalBatches: number;
-    totalPages: number;
-    lastUpdated: string | null;
-    newestBatchId: string | null;
-    pageSize?: number;
-  } = {
-    totalBatches: 0,
-    totalPages: 1,
-    lastUpdated: null,
-    newestBatchId: null,
-    pageSize: 10,
-  };
-  try {
-    meta = JSON.parse(await fs.readFile(metaPath, "utf-8")) as typeof meta;
-  } catch {}
-
-  let page: {
-    page: number;
-    totalPages: number;
-    batches: Array<{ batchId: string } & Record<string, unknown>>;
-  } = {
-    page: 1,
-    totalPages: 1,
-    batches: [],
-  };
-  try {
-    page = JSON.parse(await fs.readFile(pagePath, "utf-8")) as typeof page;
-  } catch {}
-
-  page.batches = page.batches.filter((entry) => entry.batchId !== batchId);
-  page.batches.unshift({
-    batchId,
-    triggeredAt: job.completed_at ?? job.triggered_at,
-    date: (job.completed_at ?? job.triggered_at).slice(0, 10),
-    mode: "full_report",
-    tickers,
-    tickerCount: tickers.length,
-    jobId: job.id,
-    entries,
+      })),
   });
-  page.batches = page.batches.slice(0, meta.pageSize ?? 10);
-
-  meta.totalBatches = Math.max(meta.totalBatches, page.batches.length);
-  meta.totalPages = 1;
-  meta.lastUpdated = job.completed_at ?? job.triggered_at;
-  meta.newestBatchId = batchId;
-
-  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
-  await fs.writeFile(pagePath, JSON.stringify(page, null, 2), "utf-8");
 
   await publishNotification({
     userId: ws.userId,
@@ -554,12 +511,6 @@ export async function reconcileFailedFullReportJob(
     await fs.unlink(path.join(ws.reportsDir, "progress.json"));
   } catch {
     // progress file may already be gone
-  }
-
-  try {
-    await fs.unlink(path.join(ws.triggersDir, `${job.id}.json`));
-  } catch {
-    // trigger may already be gone
   }
 }
 
