@@ -513,17 +513,17 @@ export function Strategies() {
                         <td className="px-4 py-4">
                           <ConfidenceBadge confidence={tConfidence(strategy.confidence, language)} />
                         </td>
-                        <td className="px-4 py-4 text-sm font-medium text-[var(--color-fg-muted)]">
+                        <td className="px-4 py-4 text-sm font-medium text-[var(--color-fg-default)]">
                           {tTimeframe(strategy.timeframe, language)}
                         </td>
-                        <td className="px-4 py-4 text-right text-sm font-semibold tabular-nums text-[var(--color-fg-default)]">
+                        <td className="px-4 py-4 text-right text-sm font-medium tabular-nums text-[var(--color-fg-default)]">
                           {formatILS(strategy.positionSizeILS)}
                         </td>
-                        <td className="px-4 py-4 text-right text-sm font-semibold tabular-nums text-[var(--color-fg-default)]">
+                        <td className="px-4 py-4 text-right text-sm font-medium tabular-nums text-[var(--color-fg-default)]">
                           {(strategy.positionWeightPct ?? 0).toFixed(1)}%
                         </td>
                         <td className="px-4 py-4">
-                          <p className="line-clamp-2 text-sm leading-6 text-[var(--color-fg-muted)]">
+                          <p className="line-clamp-2 text-sm font-medium leading-6 text-[var(--color-fg-muted)]">
                             {scope === "tracking" ? trackingMeta ?? strategy.reasoning : strategy.reasoning}
                           </p>
                         </td>
