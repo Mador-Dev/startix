@@ -578,6 +578,24 @@ def find_active_bootstrap_job(user_id: str) -> BootstrapJobState | None:
 # ── Analysis jobs ─────────────────────────────────────────────────────────────
 
 
+def create_job_from_record(job: JobRecord) -> None:
+    """Persist a pre-built JobRecord to the database (called from background task)."""
+    extra = {
+        "ticker": job.ticker,
+        "tickers": job.tickers,
+        "progress": job.progress.model_dump() if job.progress else None,
+    }
+    execute(
+        """
+        INSERT INTO jobs (id, user_id, action, status, source, model_tier, triggered_at, result)
+        VALUES (%s, %s, %s, %s, 'dashboard_action', 'balanced', NOW(), %s::jsonb)
+        ON CONFLICT (id) DO UPDATE SET
+          status = EXCLUDED.status, result = EXCLUDED.result
+        """,
+        (job.id, job.user_id, job.action, job.status, json.dumps(extra)),
+    )
+
+
 def create_job(user_id: str, action: str, ticker: str | None, tickers: list[str]) -> JobRecord:
     job_id = f"job_py_{uuid.uuid4().hex[:12]}"
     progress = JobProgress(

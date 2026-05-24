@@ -26,11 +26,21 @@ CREATE TABLE IF NOT EXISTS users (
   telegram_chat_id         VARCHAR(64),
   telegram_bot_token       TEXT,
   daily_points_budget      NUMERIC(12,3),
+  points                   NUMERIC(12,3) NOT NULL DEFAULT 500,
+  points_replenished_at    TIMESTAMPTZ,
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS daily_points_budget NUMERIC(12,3);
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS points NUMERIC(12,3) NOT NULL DEFAULT 500;
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS points_replenished_at TIMESTAMPTZ;
+-- Back-fill points for existing rows that have never been replenished.
+UPDATE users
+  SET points = COALESCE(daily_points_budget, 500)
+  WHERE points_replenished_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_users_state ON users (state);
 
 -- ── Portfolio ─────────────────────────────────────────────────────────────────

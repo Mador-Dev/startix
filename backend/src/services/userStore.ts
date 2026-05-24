@@ -40,8 +40,8 @@ export async function ensureUserRecord(
   const ds = await getApplicationDataSource();
   await ds.query(
     `INSERT INTO users (
-       user_id, display_name, password_hash, token_version, schedule, lifecycle, state, model_profile, plan
-     ) VALUES ($1, $2, $3, 0, $4::jsonb, $5::jsonb, 'INCOMPLETE', 'testing', 'pro')
+       user_id, display_name, password_hash, token_version, schedule, lifecycle, state, model_profile, plan, points
+     ) VALUES ($1, $2, $3, 0, $4::jsonb, $5::jsonb, 'INCOMPLETE', 'testing', 'pro', 500)
      ON CONFLICT (user_id) DO UPDATE SET
        display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), users.display_name),
        schedule = CASE

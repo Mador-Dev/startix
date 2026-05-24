@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 
 
-def make_context_tool(packet: dict[str, Any]) -> Any:
-    def get_analysis_context() -> dict[str, Any]:
-        """Return the ticker-specific research packet."""
-        return packet
-
-    return get_analysis_context
+@tool
+def get_analysis_context(config: RunnableConfig) -> dict:
+    """Return the ticker-specific research packet for this run."""
+    return config.get("configurable", {}).get("packet", {})

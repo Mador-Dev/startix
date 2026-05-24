@@ -2,6 +2,7 @@ import type { DataSource } from "typeorm";
 import { getApplicationDataSource, isApplicationDatabaseConfigured } from "../../db/applicationDataSource.js";
 import { logger } from "../logger.js";
 import { unwrapMutationRows } from "../dbUtils.js";
+import { replenishAllUserPoints } from "../pointsBudgetService.js";
 
 /**
  * Postgres-only watchdog for the simplified job model.
@@ -94,13 +95,14 @@ async function scan(): Promise<void> {
   scanning = true;
   try {
     const ds = await getApplicationDataSource();
-    const [jobs, pending] = await Promise.all([
+    const [jobs, pending, replenished] = await Promise.all([
       sweepStuckJobs(ds),
       sweepAbandonedPendingJobs(ds),
+      replenishAllUserPoints(),
     ]);
-    if (jobs > 0 || pending > 0) {
+    if (jobs > 0 || pending > 0 || replenished > 0) {
       logger.info(
-        `Watchdog scan: failed_jobs=${jobs} abandoned_pending=${pending}`
+        `Watchdog scan: failed_jobs=${jobs} abandoned_pending=${pending} points_replenished=${replenished}`
       );
     }
   } finally {

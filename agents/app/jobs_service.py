@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import uuid
 from typing import Any
+
+import openai
 
 from agents.analysis_agent import invoke_analysis_agent
 from agents.app.config import get_settings
@@ -17,9 +21,31 @@ from agents.app.schemas import (
     utc_now,
 )
 
+logger = logging.getLogger(__name__)
 
 MULTI_TICKER_ACTIONS = {"full_report", "daily_brief"}
 SINGLE_TICKER_ACTIONS = {"deep_dive", "quick_check"}
+
+_MAX_RETRIES = 4
+_RETRY_BASE_DELAY = 2.0  # seconds; doubles each attempt (2, 4, 8, 16)
+
+
+async def _invoke_with_retry(settings: Any, **kwargs: Any) -> TickerStrategyDraft:
+    """Invoke the analysis agent with exponential-backoff retry on rate-limit errors."""
+    delay = _RETRY_BASE_DELAY
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return await invoke_analysis_agent(settings, **kwargs)
+        except openai.RateLimitError:
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            logger.warning(
+                "Rate limit for %s (attempt %d/%d). Retrying in %.0fs.",
+                kwargs.get("ticker", "?"), attempt + 1, _MAX_RETRIES, delay,
+            )
+            await asyncio.sleep(delay)
+            delay *= 2
+    raise RuntimeError("Unreachable")  # pragma: no cover
 
 
 class JobsService:
@@ -28,6 +54,8 @@ class JobsService:
         self._tasks: dict[str, asyncio.Task] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
 
+    # ── Public API ────────────────────────────────────────────────────────────
+
     def list_jobs(self, user_id: str) -> JobsResponse:
         return store.list_jobs(user_id)
 
@@ -35,22 +63,14 @@ class JobsService:
         return store.read_job(user_id, job_id)
 
     async def trigger(self, user_id: str, payload: TriggerJobRequest) -> JobRecord:
+        """Create a job record in memory and return it immediately.
+
+        All validation (ticker lookup, points check) and the actual agent work
+        happen inside a background task — the HTTP response is instant.
+        """
         self._loop = asyncio.get_running_loop()
-
-        def _prepare() -> JobRecord:
-            tickers = self._resolve_tickers(user_id, payload.action, payload.ticker)
-            charge = self._charge_for_action(payload.action, len(tickers))
-            require_points(
-                user_id,
-                charge,
-                source="agents",
-                action=payload.action,
-                note=f"Triggered {payload.action} for {len(tickers)} ticker(s)",
-            )
-            return store.create_job(user_id, payload.action, payload.ticker, tickers)
-
-        job = await asyncio.to_thread(_prepare)
-        self._tasks[job.id] = asyncio.create_task(self._run_job(job))
+        job = self._make_pending_job(user_id, payload)
+        self._tasks[job.id] = asyncio.create_task(self._prepare_and_run(job, payload))
         return job
 
     async def cancel(self, user_id: str, job_id: str) -> JobRecord:
@@ -79,7 +99,8 @@ class JobsService:
             job.progress.currentStep = "queued"
             job.progress.currentTicker = job.ticker or (job.tickers[0] if job.tickers else None)
         store.write_job(job)
-        self._tasks[job.id] = asyncio.create_task(self._run_job(job))
+        payload = TriggerJobRequest(action=job.action, ticker=job.ticker)
+        self._tasks[job.id] = asyncio.create_task(self._prepare_and_run(job, payload))
         return job
 
     def trigger_from_chat(self, user_id: str, action: str, ticker: str | None) -> dict:
@@ -90,71 +111,112 @@ class JobsService:
         job = future.result(timeout=2)
         return {"jobId": job.id, "status": job.status, "action": job.action, "ticker": job.ticker}
 
-    @staticmethod
-    def _charge_for_action(action: str, ticker_count: int) -> float:
-        if action in {"full_report", "daily_brief"}:
-            return POINT_COSTS.get(action, 0.0) * max(1, ticker_count)
-        return POINT_COSTS.get(action, 0.0)
+    # ── Background task ───────────────────────────────────────────────────────
+
+    async def _prepare_and_run(self, job: JobRecord, payload: TriggerJobRequest) -> None:
+        """Validate, persist, and run the job — entirely in the background."""
+        user_id = job.user_id
+
+        # --- Validation + initial DB write (offloaded to thread pool) ---
+        def _prepare() -> list[str]:
+            tickers = self._resolve_tickers(user_id, payload.action, payload.ticker)
+            charge = self._charge_for_action(payload.action, len(tickers))
+            require_points(
+                user_id, charge,
+                source="agents", action=payload.action,
+                note=f"Triggered {payload.action} for {len(tickers)} ticker(s)",
+            )
+            return tickers
+
+        try:
+            tickers = await asyncio.to_thread(_prepare)
+        except (PointsBudgetExceededError, ValueError, FileNotFoundError) as exc:
+            job.status = "failed"
+            job.error = str(exc)
+            job.completed_at = utc_now()
+            self._update_progress(job, [], {}, None, None)
+            try:
+                await asyncio.to_thread(store.create_job_from_record, job)
+            except Exception:
+                pass
+            return
+
+        # Hydrate the job with resolved tickers and write it to DB.
+        job.tickers = tickers
+        self._update_progress(job, [], {}, payload.ticker, "queued")
+        await asyncio.to_thread(store.create_job_from_record, job)
+
+        await self._run_job(job)
 
     async def _run_job(self, job: JobRecord) -> None:
         user_id = job.user_id
-        if not user_id:
-            raise ValueError("Job missing user_id")
 
-        lookup = store.load_position_lookup(user_id)
-        guidance = store.load_guidance(user_id)
-        reports = store.list_report_summaries(user_id, limit=5)
+        # Load all context in one thread round-trip.
+        def _load_context() -> tuple[dict, dict, list]:
+            return (
+                store.load_position_lookup(user_id),
+                store.load_guidance(user_id),
+                store.list_report_summaries(user_id, limit=5),
+            )
+
+        lookup, guidance, reports = await asyncio.to_thread(_load_context)
 
         job.status = "running"
         job.started_at = utc_now()
-        store.write_job(job)
+        await asyncio.to_thread(store.write_job, job)
 
         completed: list[str] = []
         failures: dict[str, str] = {}
         strategies: list[TickerStrategyDraft] = []
 
-        for ticker in job.tickers:
-            if ticker not in lookup:
-                failures[ticker] = "Ticker not found in portfolio."
-                self._update_progress(job, completed, failures, ticker, "missing_context")
-                store.write_job(job)
-                continue
+        semaphore = asyncio.Semaphore(self.settings.bootstrap_max_concurrency)
 
-            self._update_progress(job, completed, failures, ticker, "analysis")
-            store.write_job(job)
+        async def _run_ticker(ticker: str) -> tuple[str, TickerStrategyDraft | None, str | None]:
+            async with semaphore:
+                if ticker not in lookup:
+                    return ticker, None, "Ticker not found in portfolio."
+                try:
+                    strategy = await _invoke_with_retry(
+                        self.settings,
+                        action=job.action,
+                        ticker=ticker,
+                        position_context=lookup[ticker],
+                        guidance=self._guidance_model(guidance.get(ticker)),
+                        current_strategy=store.load_strategy(user_id, ticker),
+                        recent_reports=[r for r in reports if r.get("ticker") == ticker],
+                    )
+                    return ticker, strategy, None
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    return ticker, None, str(exc)
 
-            try:
-                strategy = await invoke_analysis_agent(
-                    self.settings,
-                    action=job.action,
-                    ticker=ticker,
-                    position_context=lookup[ticker],
-                    guidance=self._guidance_model(guidance.get(ticker)),
-                    current_strategy=store.load_strategy(user_id, ticker),
-                    recent_reports=[r for r in reports if r.get("ticker") == ticker],
-                )
-                store.upsert_strategy(user_id, ticker, strategy, guidance_applied=False)
-                store.write_analysis_artifacts(user_id, job.action, ticker, strategy)
-                strategies.append(strategy)
-                completed.append(ticker)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                failures[ticker] = str(exc)
+        self._update_progress(job, completed, failures, None, "analysis")
+        await asyncio.to_thread(store.write_job, job)
 
-            self._update_progress(job, completed, failures, ticker, "done")
-            store.write_job(job)
+        results = await asyncio.gather(*(_run_ticker(t) for t in job.tickers))
+
+        def _save_results() -> None:
+            for ticker, strategy, error in results:
+                if strategy is not None:
+                    store.upsert_strategy(user_id, ticker, strategy, guidance_applied=False)
+                    store.write_analysis_artifacts(user_id, job.action, ticker, strategy)
+                    strategies.append(strategy)
+                    completed.append(ticker)
+                else:
+                    failures[ticker] = error or "Unknown error"
+
+        await asyncio.to_thread(_save_results)
 
         job.completed_at = utc_now()
-        if failures and completed:
-            job.status = "partial_completed"
-        elif failures:
-            job.status = "failed"
-        else:
-            job.status = "completed"
+        job.status = (
+            "partial_completed" if failures and completed
+            else "failed" if failures
+            else "completed"
+        )
         job.error = "; ".join(f"{t}: {r}" for t, r in failures.items()) or None
         job.result = {
-            "strategies": [item.model_dump() for item in strategies],
+            "strategies": [s.model_dump() for s in strategies],
             "completedTickers": completed,
             "failedTickers": list(failures.keys()),
         }
@@ -162,13 +224,33 @@ class JobsService:
         if batch:
             job.result["batch"] = batch
         self._update_progress(job, completed, failures, None, None)
-        store.write_job(job)
+        await asyncio.to_thread(store.write_job, job)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _guidance_model(payload: dict | None) -> PositionGuidanceInput | None:
-        if not payload:
-            return None
-        return PositionGuidanceInput.model_validate(payload)
+    def _make_pending_job(user_id: str, payload: TriggerJobRequest) -> JobRecord:
+        job_id = f"job_py_{uuid.uuid4().hex[:12]}"
+        return JobRecord(
+            id=job_id,
+            action=payload.action,
+            ticker=payload.ticker,
+            status="pending",
+            triggered_at=utc_now(),
+            user_id=user_id,
+            tickers=[],
+            progress=JobProgress(
+                pct=0, currentTicker=payload.ticker, currentStep="queued",
+                completedTickers=[], remainingTickers=[],
+                totalTickers=0, completedSteps=0, totalSteps=0,
+            ),
+        )
+
+    @staticmethod
+    def _charge_for_action(action: str, ticker_count: int) -> float:
+        if action in {"full_report", "daily_brief"}:
+            return POINT_COSTS.get(action, 0.0) * max(1, ticker_count)
+        return POINT_COSTS.get(action, 0.0)
 
     def _resolve_tickers(self, user_id: str, action: str, ticker: str | None) -> list[str]:
         lookup = store.load_position_lookup(user_id)
@@ -182,6 +264,12 @@ class JobsService:
                 raise FileNotFoundError(f"Ticker not found in portfolio: {normalized}")
             return [normalized]
         raise ValueError(f"Unsupported action: {action}")
+
+    @staticmethod
+    def _guidance_model(payload: dict | None) -> PositionGuidanceInput | None:
+        if not payload:
+            return None
+        return PositionGuidanceInput.model_validate(payload)
 
     @staticmethod
     def _update_progress(

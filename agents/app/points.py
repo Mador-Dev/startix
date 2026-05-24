@@ -33,76 +33,61 @@ def _round_points(value: float) -> float:
 
 def _coerce_float(value: object, fallback: float = 0.0) -> float:
     try:
-      parsed = float(value)
+        parsed = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-      return fallback
+        return fallback
     return parsed
 
 
-def get_effective_daily_budget(user_id: str) -> float:
-    row = fetch_one(
-        """
-        SELECT
-          u.daily_points_budget,
-          (
-            SELECT value
-            FROM admin_defaults
-            WHERE key = 'pointsBudget'
-            LIMIT 1
-          ) AS admin_points_budget
-        FROM users u
-        WHERE u.user_id = %s
-        LIMIT 1
-        """,
-        (user_id,),
-    )
-    if row:
-        user_budget = _coerce_float(row.get("daily_points_budget"), 0.0)
-        if user_budget > 0:
-            return _round_points(user_budget)
-        admin_points_budget = row.get("admin_points_budget")
-        if isinstance(admin_points_budget, dict):
-            default_budget = _coerce_float(admin_points_budget.get("dailyBudgetPoints"), 500.0)
-            if default_budget > 0:
-                return _round_points(default_budget)
-    return 500.0
-
-
 def get_balance_snapshot(user_id: str) -> BalanceSnapshot:
-    budget = get_effective_daily_budget(user_id)
+    """Read the live balance directly from users.points — no ledger aggregation."""
     row = fetch_one(
-        """
-        SELECT
-          COALESCE(SUM(CASE WHEN points_delta < 0 THEN -points_delta ELSE 0 END), 0) AS points_used,
-          COALESCE(SUM(CASE WHEN points_delta > 0 THEN points_delta ELSE 0 END), 0) AS points_credits
-        FROM user_points_ledger
-        WHERE user_id = %s
-          AND expires_at > NOW()
-        """,
+        "SELECT points, COALESCE(daily_points_budget, 500) AS budget FROM users WHERE user_id = %s",
         (user_id,),
     ) or {}
-    points_used = _round_points(_coerce_float(row.get("points_used"), 0.0))
-    points_credits = _round_points(_coerce_float(row.get("points_credits"), 0.0))
-    effective_budget = _round_points(budget + points_credits)
-    points_remaining = _round_points(max(0.0, effective_budget - points_used))
+    budget = _round_points(_coerce_float(row.get("budget"), 500.0))
+    remaining = _round_points(max(0.0, _coerce_float(row.get("points"), budget)))
+    used = _round_points(max(0.0, budget - remaining))
     return BalanceSnapshot(
-        daily_budget_points=effective_budget,
-        points_used=points_used,
-        points_remaining=points_remaining,
+        daily_budget_points=budget,
+        points_used=used,
+        points_remaining=remaining,
     )
 
 
-def require_points(user_id: str, points: float, *, source: str, action: str, ref_id: str | None = None, note: str | None = None) -> None:
-    required_points = _round_points(points)
-    if required_points <= 0:
+def require_points(
+    user_id: str,
+    points: float,
+    *,
+    source: str,
+    action: str,
+    ref_id: str | None = None,
+    note: str | None = None,
+) -> None:
+    required = _round_points(points)
+    if required <= 0:
         return
 
-    snapshot = get_balance_snapshot(user_id)
-    if snapshot.points_remaining < required_points:
+    # Atomic check-and-deduct: only succeeds if the user has enough points.
+    row = fetch_one(
+        """
+        UPDATE users
+           SET points     = points - %s,
+               updated_at = NOW()
+         WHERE user_id = %s
+           AND points >= %s
+        RETURNING points
+        """,
+        (required, user_id, required),
+    )
+    if row is None:
+        snapshot = get_balance_snapshot(user_id)
         raise PointsBudgetExceededError(
-            f"Not enough points remaining for {action}: need {required_points:.3f}, have {snapshot.points_remaining:.3f}"
+            f"Not enough points for {action}: "
+            f"need {required:.3f}, have {snapshot.points_remaining:.3f}"
         )
 
+    # Write to the ledger for audit trail only (not used for balance checks).
     execute(
         """
         INSERT INTO user_points_ledger (
@@ -114,7 +99,7 @@ def require_points(user_id: str, points: float, *, source: str, action: str, ref
         (
             str(uuid.uuid4()),
             user_id,
-            -required_points,
+            -required,
             source,
             action,
             ref_id,

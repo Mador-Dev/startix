@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 
 
-def make_research_packet_tool(research_packet: dict[str, Any]) -> Callable[[], dict[str, Any]]:
-    def get_research_packet() -> dict[str, Any]:
-        """Return the normalized research packet for the current ticker."""
-        return research_packet
-
-    return get_research_packet
+@tool
+def get_research_packet(config: RunnableConfig) -> dict:
+    """Return the normalized research packet for the current ticker."""
+    return config.get("configurable", {}).get("research_packet", {})
 
 
-def make_guidance_tool(guidance: dict[str, Any] | None) -> Callable[[], dict[str, Any]]:
-    def get_guidance() -> dict[str, Any]:
-        """Return the user-supplied guidance for this ticker."""
-        return guidance or {}
-
-    return get_guidance
+@tool
+def get_guidance(config: RunnableConfig) -> dict:
+    """Return the user-supplied guidance for this ticker."""
+    return config.get("configurable", {}).get("guidance", {}) or {}

@@ -206,8 +206,8 @@ router.post(
     if (isApplicationDatabaseConfigured()) {
       const ds = await getApplicationDataSource();
       await ds.query(
-        `INSERT INTO users (user_id, display_name, password_hash, schedule, model_tier, model_profile, state, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, 'testing', 'INCOMPLETE', NOW(), NOW())
+        `INSERT INTO users (user_id, display_name, password_hash, schedule, model_tier, model_profile, state, points, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'testing', 'INCOMPLETE', 500, NOW(), NOW())
          ON CONFLICT (user_id) DO NOTHING`,
         [userId, displayName, hash, JSON.stringify(schedule), modelTier]
       );

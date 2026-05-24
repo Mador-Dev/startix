@@ -58,11 +58,9 @@ class ChatService:
 
         reply_text = await invoke_chat_agent(
             self.settings,
+            user_id=user_id,
+            jobs_service=self.jobs,
             messages=messages,
-            load_portfolio=lambda: store.load_portfolio(user_id),
-            load_strategies=lambda: store.list_strategies(user_id),
-            load_reports=lambda: store.list_report_summaries(user_id, limit=6),
-            trigger_job=lambda action, ticker: self.jobs.trigger_from_chat(user_id, action, ticker),
         )
 
         store.append_message(conversation_id, "assistant", reply_text)

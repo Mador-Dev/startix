@@ -46,12 +46,18 @@ export async function setUserDailyPointsBudget(userId: string, dailyBudgetPoints
     return roundPoints(dailyBudgetPoints);
   }
 
+  const budget = roundPoints(dailyBudgetPoints);
   const ds = await getApplicationDataSource();
+  // Update the budget cap and reset the live balance to the new cap.
   await ds.query(
-    `UPDATE users SET daily_points_budget = $2, updated_at = NOW() WHERE user_id = $1`,
-    [userId, roundPoints(dailyBudgetPoints)]
+    `UPDATE users
+        SET daily_points_budget = $2,
+            points              = $2,
+            updated_at          = NOW()
+      WHERE user_id = $1`,
+    [userId, budget]
   );
-  return getEffectiveDailyPointsBudget(userId);
+  return budget;
 }
 
 export async function grantUserPointsCredit(
@@ -65,20 +71,33 @@ export async function grantUserPointsCredit(
   }
   if (!isApplicationDatabaseConfigured()) return;
 
+  const amount = roundPoints(points);
   const ds = await getApplicationDataSource();
+
+  // Credit the live balance on the users row.
+  await ds.query(
+    `UPDATE users
+        SET points     = points + $2,
+            updated_at = NOW()
+      WHERE user_id = $1`,
+    [userId, amount]
+  );
+
+  // Keep ledger for audit trail.
   await ds.query(
     `INSERT INTO user_points_ledger (
        user_id, points_delta, entry_type, source, action, ref_id, note, expires_at
      ) VALUES (
        $1, $2, 'credit', 'admin', 'grant_credit', $3, $4, NOW() + INTERVAL '24 hours'
      )`,
-    [userId, roundPoints(points), refId ?? null, note?.slice(0, 1_000) ?? null]
+    [userId, amount, refId ?? null, note?.slice(0, 1_000) ?? null]
   );
 }
 
 export async function getUserPointsBalance(userId: string): Promise<UserPointsBalanceSnapshot> {
   const now = new Date();
   const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1_000).toISOString();
+  const windowEnd   = new Date(now.getTime() + 24 * 60 * 60 * 1_000).toISOString();
 
   const budget = await getEffectiveDailyPointsBudget(userId);
   if (!isApplicationDatabaseConfigured()) {
@@ -89,43 +108,53 @@ export async function getUserPointsBalance(userId: string): Promise<UserPointsBa
       pctUsed: 0,
       exhausted: false,
       windowStart,
-      windowEnd: new Date(now.getTime() + 24 * 60 * 60 * 1_000).toISOString(),
+      windowEnd,
     };
   }
 
   const ds = await getApplicationDataSource();
   const rows = await ds.query(
-    `SELECT
-       COALESCE(SUM(CASE WHEN points_delta < 0 THEN -points_delta ELSE 0 END), 0) AS points_used,
-       COALESCE(SUM(CASE WHEN points_delta > 0 THEN points_delta ELSE 0 END), 0) AS points_credits,
-       MIN(expires_at) AS next_expiry
-     FROM user_points_ledger
-     WHERE user_id = $1
-       AND expires_at > NOW()`,
+    `SELECT points FROM users WHERE user_id = $1 LIMIT 1`,
     [userId]
-  ) as Array<{
-    points_used: string | number;
-    points_credits: string | number;
-    next_expiry: Date | string | null;
-  }>;
+  ) as Array<{ points: string | number | null }>;
 
-  const pointsUsed = roundPoints(Number(rows[0]?.points_used ?? 0));
-  const pointsCredits = roundPoints(Number(rows[0]?.points_credits ?? 0));
-  const effectiveBudget = roundPoints(budget + pointsCredits);
-  const pointsRemaining = roundPoints(clampMinZero(effectiveBudget - pointsUsed));
-  const exhausted = pointsRemaining <= 0;
-  const pctUsed = Math.max(0, Math.min(999, Math.round(
-    effectiveBudget > 0 ? (pointsUsed / effectiveBudget) * 100 : 0
+  const pointsRemaining = roundPoints(clampMinZero(Number(rows[0]?.points ?? budget)));
+  const pointsUsed      = roundPoints(clampMinZero(budget - pointsRemaining));
+  const pctUsed         = Math.max(0, Math.min(999, Math.round(
+    budget > 0 ? (pointsUsed / budget) * 100 : 0
   )));
-  const nextExpiry = rows[0]?.next_expiry ? new Date(rows[0].next_expiry).toISOString() : null;
 
   return {
-    dailyBudgetPoints: effectiveBudget,
+    dailyBudgetPoints: budget,
     pointsUsed,
     pointsRemaining,
     pctUsed,
-    exhausted,
+    exhausted: pointsRemaining <= 0,
     windowStart,
-    windowEnd: nextExpiry ?? new Date(now.getTime() + 24 * 60 * 60 * 1_000).toISOString(),
+    windowEnd,
   };
+}
+
+/**
+ * Reset every non-blocked user's live points balance back to their daily budget.
+ * Called by the watchdog once per day (tracked via `points_replenished_at`).
+ */
+export async function replenishAllUserPoints(): Promise<number> {
+  if (!isApplicationDatabaseConfigured()) return 0;
+
+  const ds = await getApplicationDataSource();
+  const result = await ds.query(
+    `UPDATE users
+        SET points                = COALESCE(daily_points_budget, 500),
+            points_replenished_at = NOW(),
+            updated_at            = NOW()
+      WHERE state != 'BLOCKED'
+        AND (
+          points_replenished_at IS NULL
+          OR points_replenished_at < NOW() - INTERVAL '23 hours'
+        )
+      RETURNING user_id`
+  ) as Array<{ user_id: string }>;
+
+  return Array.isArray(result) ? result.length : 0;
 }

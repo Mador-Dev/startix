@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import cache
 from typing import Any
 
 from deepagents import create_deep_agent
@@ -17,9 +18,61 @@ from agents.analysis_agent.prompts import (
     SENTIMENT_PROMPT,
 )
 from agents.analysis_agent.state import AnalysisResearchInput
-from agents.analysis_agent.tools import make_context_tool
+from agents.analysis_agent.tools import get_analysis_context
 from agents.app.config import Settings
 from agents.app.schemas import PositionGuidanceInput, TickerStrategyDraft, utc_now
+
+
+# Actions that need the full 7-subagent crew.
+_FULL_ACTIONS = {"deep_dive", "full_report"}
+
+# Subagent specs: (name, description, prompt) – tools are injected at build time.
+_ALL_SUBAGENT_SPECS = [
+    ("planner", "Plan the minimum useful research path.", PLANNER_PROMPT),
+    ("analyst_fundamentals", "Analyze fundamentals.", FUNDAMENTALS_PROMPT),
+    ("analyst_sentiment", "Analyze sentiment and catalysts.", SENTIMENT_PROMPT),
+    ("analyst_risk", "Analyze risks and invalidation conditions.", RISK_PROMPT),
+    ("critic", "Critique the draft strategy.", CRITIC_PROMPT),
+    ("bull_case", "Argue the bull case.", BULL_PROMPT),
+    ("bear_case", "Argue the bear case.", BEAR_PROMPT),
+]
+
+_LIGHT_SUBAGENT_SPECS = [
+    ("analyst_fundamentals", "Analyze fundamentals.", FUNDAMENTALS_PROMPT),
+    ("analyst_sentiment", "Analyze sentiment and catalysts.", SENTIMENT_PROMPT),
+    ("analyst_risk", "Analyze risks and invalidation conditions.", RISK_PROMPT),
+]
+
+
+def _subagent_dict(name: str, description: str, system_prompt: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": description,
+        "system_prompt": system_prompt,
+        "tools": [get_analysis_context],
+    }
+
+
+@cache
+def _build_agent(model: str, tier: str) -> Any:
+    """Compile a reusable deep agent for the given model and action tier.
+
+    Built once per (model, tier) combination and cached for the process lifetime.
+    The research packet is injected at invoke time via RunnableConfig configurable.
+    """
+    specs = _ALL_SUBAGENT_SPECS if tier == "full" else _LIGHT_SUBAGENT_SPECS
+    subagents = [_subagent_dict(name, desc, prompt) for name, desc, prompt in specs]
+    return create_deep_agent(
+        model=model,
+        system_prompt=COORDINATOR_PROMPT,
+        tools=[get_analysis_context],
+        subagents=subagents,
+        response_format=TickerStrategyDraft,
+    )
+
+
+def _tier(action: str) -> str:
+    return "full" if action in _FULL_ACTIONS else "light"
 
 
 def build_research_input(
@@ -42,35 +95,6 @@ def build_research_input(
     }
 
 
-def _subagent(name: str, description: str, system_prompt: str, tools: list[Any]) -> dict[str, Any]:
-    return {
-        "name": name,
-        "description": description,
-        "system_prompt": system_prompt,
-        "tools": tools,
-    }
-
-
-def build_strategy_agent(settings: Settings, packet: AnalysisResearchInput) -> Any:
-    tools = [make_context_tool(packet)]
-    subagents = [
-        _subagent("planner", "Plan the minimum useful research path.", PLANNER_PROMPT, tools),
-        _subagent("analyst_fundamentals", "Analyze fundamentals.", FUNDAMENTALS_PROMPT, tools),
-        _subagent("analyst_sentiment", "Analyze sentiment and catalysts.", SENTIMENT_PROMPT, tools),
-        _subagent("analyst_risk", "Analyze risks and invalidation conditions.", RISK_PROMPT, tools),
-        _subagent("critic", "Critique the draft strategy.", CRITIC_PROMPT, tools),
-        _subagent("bull_case", "Argue the bull case.", BULL_PROMPT, tools),
-        _subagent("bear_case", "Argue the bear case.", BEAR_PROMPT, tools),
-    ]
-    return create_deep_agent(
-        model=settings.deep_agent_model,
-        system_prompt=COORDINATOR_PROMPT,
-        tools=tools,
-        subagents=subagents,
-        response_format=TickerStrategyDraft,
-    )
-
-
 def _strategy_from_result(result: Any, *, ticker: str) -> TickerStrategyDraft:
     if not isinstance(result, dict):
         raise ValueError(f"No structured strategy returned for {ticker}")
@@ -82,16 +106,22 @@ def _strategy_from_result(result: Any, *, ticker: str) -> TickerStrategyDraft:
     raise ValueError(f"No structured strategy returned for {ticker}")
 
 
-def _invoke_analysis_agent_sync(agent: Any, packet: AnalysisResearchInput) -> TickerStrategyDraft:
-    action = packet["action"]
+def _invoke_agent_sync(
+    model: str, action: str, packet: AnalysisResearchInput
+) -> TickerStrategyDraft:
+    agent = _build_agent(model, _tier(action))
     instruction = ACTION_INSTRUCTIONS.get(action, "Refresh the ticker strategy.")
     prompt = (
         f"{instruction}\n\n"
         f"Ticker: {packet['ticker']}\n"
-        f"Context packet:\n{packet}\n\n"
-        "Use the subagents when useful, challenge weak assumptions, and return a structured strategy."
+        "Use get_analysis_context to read the full research packet. "
+        "Use subagents when they add signal, challenge weak assumptions, "
+        "and return a structured strategy."
     )
-    result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": prompt}]},
+        config={"configurable": {"packet": packet}},
+    )
     return _strategy_from_result(result, ticker=packet["ticker"])
 
 
@@ -110,5 +140,4 @@ async def invoke_analysis_agent(
     packet = build_research_input(
         action, ticker, position_context, guidance, current_strategy, recent_reports
     )
-    agent = build_strategy_agent(settings, packet)
-    return await asyncio.to_thread(_invoke_analysis_agent_sync, agent, packet)
+    return await asyncio.to_thread(_invoke_agent_sync, settings.deep_agent_model, action, packet)

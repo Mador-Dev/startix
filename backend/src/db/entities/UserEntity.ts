@@ -26,6 +26,10 @@ export interface UserEntity {
   stopLossThresholdPct: string;
   state: UserState;
   restriction: UserRestriction;
+  /** Current available points balance — updated atomically on every deduction and credit. */
+  points: string;
+  /** Timestamp of the last daily replenishment; used to gate the once-per-day reset. */
+  pointsReplenishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -62,6 +66,17 @@ export const UserEntitySchema = new EntitySchema<UserEntity>({
     },
     state: { type: "varchar", length: 32 },
     restriction: { type: "varchar", length: 32, nullable: true },
+    points: {
+      type: "numeric",
+      precision: 12,
+      scale: 3,
+      default: 500,
+    },
+    pointsReplenishedAt: {
+      name: "points_replenished_at",
+      type: "timestamptz",
+      nullable: true,
+    },
     createdAt: { name: "created_at", type: "timestamptz" },
     updatedAt: { name: "updated_at", type: "timestamptz" },
   },
