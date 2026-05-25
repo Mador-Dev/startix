@@ -36,25 +36,6 @@ export interface StoredBatchEntry {
   nextReviewAt?: string | null;
 }
 
-export interface StoredBatch {
-  batchId: string;
-  triggeredAt: string;
-  date: string;
-  mode: string;
-  tickers: string[];
-  tickerCount: number;
-  jobId: string | null;
-  entries: Record<string, StoredBatchEntry>;
-  summary?: {
-    headline?: string;
-    today?: string;
-    tomorrow?: string;
-    marketView?: string;
-    securityNote?: string;
-    dashboardPath?: string;
-  };
-  highlights?: string[];
-}
 
 export interface FeedEventRecord {
   id: string;
@@ -106,13 +87,17 @@ export interface FeedQuery {
   search?: string | null;
 }
 
-interface JobBatchRow {
+interface FeedItemRow {
   id: string;
-  action: string;
-  status: string;
-  triggered_at: Date | string;
-  completed_at: Date | string | null;
-  result: unknown;
+  job_id: string | null;
+  kind: string;
+  title: string;
+  summary: string;
+  tone: string;
+  tickers: string[];
+  highlights: unknown;
+  payload: unknown;
+  created_at: Date | string;
 }
 
 function toIso(value: Date | string | null | undefined): string | null {
@@ -126,218 +111,61 @@ function asStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
-function normalizeEntry(ticker: string, mode: string, raw: unknown): StoredBatchEntry | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const record = raw as Record<string, unknown>;
-  const verdict = typeof record["verdict"] === "string" ? record["verdict"] : "HOLD";
-  const confidence = typeof record["confidence"] === "string" ? record["confidence"] : "medium";
-  const reasoning = typeof record["reasoning"] === "string" ? record["reasoning"] : "";
-  const timeframe = typeof record["timeframe"] === "string" ? record["timeframe"] : "months";
+function rowToFeedItem(row: FeedItemRow): FeedItem {
+  const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+    ? (row.payload as Record<string, unknown>)
+    : {};
+  const kind = row.kind as FeedItem["kind"];
+  const mode = typeof payload["mode"] === "string" ? payload["mode"] : row.kind;
+  const entries = payload["entries"] && typeof payload["entries"] === "object" && !Array.isArray(payload["entries"])
+    ? (payload["entries"] as Record<string, StoredBatchEntry>)
+    : {};
+  const dailyBriefData = payload["dailyBrief"] && typeof payload["dailyBrief"] === "object" && !Array.isArray(payload["dailyBrief"])
+    ? (payload["dailyBrief"] as Record<string, unknown>)
+    : null;
   return {
-    ticker,
+    id: row.id,
+    createdAt: toIso(row.created_at) ?? new Date().toISOString(),
+    kind,
     mode,
-    verdict,
-    confidence,
-    reasoning,
-    timeframe,
-    analystTypes: asStringArray(record["analystTypes"]),
-    hasBullCase: Boolean(record["hasBullCase"]),
-    hasBearCase: Boolean(record["hasBearCase"]),
-  };
-}
-
-function parseStoredBatch(row: JobBatchRow): StoredBatch | null {
-  if (!row.result || typeof row.result !== "object" || Array.isArray(row.result)) return null;
-  const root = row.result as Record<string, unknown>;
-  const nestedResult =
-    root["result"] && typeof root["result"] === "object" && !Array.isArray(root["result"])
-      ? (root["result"] as Record<string, unknown>)
-      : null;
-  const rawBatch = root["batch"] ?? nestedResult?.["batch"];
-  if (!rawBatch || typeof rawBatch !== "object" || Array.isArray(rawBatch)) return null;
-  const batch = rawBatch as Record<string, unknown>;
-
-  const entriesRecord =
-    batch["entries"] && typeof batch["entries"] === "object" && !Array.isArray(batch["entries"])
-      ? (batch["entries"] as Record<string, unknown>)
-      : {};
-
-  const normalizedEntries = Object.fromEntries(
-    Object.entries(entriesRecord)
-      .map(([ticker, entry]) => [ticker, normalizeEntry(ticker, String(batch["mode"] ?? row.action), entry)] as const)
-      .filter((item): item is readonly [string, StoredBatchEntry] => item[1] !== null)
-  );
-
-  const tickers = asStringArray(batch["tickers"]);
-  if (tickers.length === 0 || Object.keys(normalizedEntries).length === 0) return null;
-
-  const triggeredAt = typeof batch["triggeredAt"] === "string"
-    ? batch["triggeredAt"]
-    : toIso(row.completed_at) ?? toIso(row.triggered_at) ?? new Date().toISOString();
-
-  const storedBatch: StoredBatch = {
-    batchId: typeof batch["batchId"] === "string" ? batch["batchId"] : row.id,
-    triggeredAt,
-    date: typeof batch["date"] === "string" ? batch["date"] : triggeredAt.slice(0, 10),
-    mode: typeof batch["mode"] === "string" ? batch["mode"] : row.action,
-    tickers,
-    tickerCount: typeof batch["tickerCount"] === "number" ? batch["tickerCount"] : tickers.length,
-    jobId: typeof batch["jobId"] === "string" ? batch["jobId"] : row.id,
-    entries: normalizedEntries,
-  };
-  const summary =
-    batch["summary"] && typeof batch["summary"] === "object" && !Array.isArray(batch["summary"])
-      ? (batch["summary"] as StoredBatch["summary"])
-      : null;
-  const highlights = asStringArray(batch["highlights"]);
-  if (summary) storedBatch.summary = summary;
-  if (highlights.length > 0) storedBatch.highlights = highlights;
-  return storedBatch;
-}
-
-async function listReportBatches(userId: string, limit = MAX_STORED_EVENTS): Promise<StoredBatch[]> {
-  if (!isApplicationDatabaseConfigured()) return [];
-  const ds = await getApplicationDataSource();
-  const rows = (await ds.query(
-    `SELECT id, action, status, triggered_at, completed_at, result
-       FROM jobs
-      WHERE user_id = $1
-        AND status IN ('completed', 'partial_completed')
-        AND action IN ('daily_brief', 'full_report', 'deep_dive', 'quick_check')
-      ORDER BY COALESCE(completed_at, triggered_at) DESC
-      LIMIT $2`,
-    [userId, limit]
-  )) as JobBatchRow[];
-
-  return rows
-    .map(parseStoredBatch)
-    .filter((batch): batch is StoredBatch => batch !== null);
-}
-
-function toneForMode(mode: string): FeedItem["tone"] {
-  switch (mode) {
-    case "daily_brief":
-      return "sky";
-    case "deep_dive":
-      return "rose";
-    case "full_report":
-      return "emerald";
-    case "new_ideas":
-      return "amber";
-    default:
-      return "amber";
-  }
-}
-
-function determineReportTone(batch: StoredBatch): FeedItem["tone"] {
-  const entries = Object.values(batch.entries);
-  const hasNegative = entries.some((entry) => ["REDUCE", "SELL", "CLOSE"].includes(entry.verdict));
-  const hasPositive = entries.some((entry) => ["BUY", "ADD"].includes(entry.verdict));
-
-  if (batch.mode === "quick_check") {
-    return hasNegative ? "rose" : "emerald";
-  }
-  if (batch.mode === "daily_brief") {
-    return hasNegative ? "rose" : "sky";
-  }
-  if (batch.mode === "deep_dive" || batch.mode === "full_report") {
-    if (hasNegative) return "rose";
-    if (hasPositive) return "emerald";
-    return "amber";
-  }
-  if (batch.mode === "new_ideas") {
-    return "amber";
-  }
-  return toneForMode(batch.mode);
-}
-
-function summarizeBatch(batch: StoredBatch): string {
-  const primaryTicker = batch.tickers[0] ?? null;
-  const primaryEntry = primaryTicker ? batch.entries?.[primaryTicker] : null;
-
-  switch (batch.mode) {
-    case "quick_check":
-      return primaryEntry?.reasoning ?? `Quick check completed for ${primaryTicker ?? "position"}.`;
-    case "daily_brief": {
-      if (batch.summary?.headline) return batch.summary.headline;
-      const escalated = Object.values(batch.entries).filter((entry) =>
-        ["REDUCE", "SELL", "CLOSE"].includes(entry.verdict)
-      ).length;
-      if (escalated > 0) {
-        return `${escalated} position${escalated === 1 ? "" : "s"} need closer attention.`;
-      }
-      return `Daily brief completed across ${batch.tickerCount} position${batch.tickerCount === 1 ? "" : "s"}.`;
-    }
-    case "deep_dive":
-      return primaryEntry?.reasoning ?? `Deep dive refreshed for ${primaryTicker ?? "ticker"}.`;
-    case "full_report":
-      return `Full report refreshed across ${batch.tickerCount} ticker${batch.tickerCount === 1 ? "" : "s"}.`;
-    case "new_ideas":
-      return primaryEntry?.reasoning ?? `Generated ${batch.tickerCount} new idea${batch.tickerCount === 1 ? "" : "s"}.`;
-    default:
-      return `Generated ${batch.mode.replace(/_/g, " ")}.`;
-  }
-}
-
-function buildHighlights(batch: StoredBatch): string[] {
-  if (batch.highlights?.length) return batch.highlights.slice(0, 4);
-  if (batch.mode === "daily_brief") {
-    const escalated = Object.values(batch.entries)
-      .filter((entry) => ["REDUCE", "SELL", "CLOSE"].includes(entry.verdict))
-      .map((entry) => `${entry.ticker} needs follow-up`);
-    return escalated.slice(0, 3);
-  }
-
-  return Object.values(batch.entries)
-    .slice(0, 3)
-    .map((entry) => `${entry.ticker} · ${entry.verdict} · ${entry.confidence}`);
-}
-
-function titleForBatch(batch: StoredBatch): string {
-  switch (batch.mode) {
-    case "quick_check":
-      return `${batch.tickers[0] ?? "Position"} quick check`;
-    case "daily_brief":
-      return "Daily brief";
-    case "deep_dive":
-      return `${batch.tickers[0] ?? "Ticker"} deep dive`;
-    case "full_report":
-      return "Full report";
-    case "new_ideas":
-      return "New ideas";
-    default:
-      return batch.mode.replace(/_/g, " ");
-  }
-}
-
-export function buildReportFeedItems(batches: StoredBatch[]): FeedItem[] {
-  return batches.map((batch) => ({
-    id: batch.batchId,
-    createdAt: batch.triggeredAt,
-    kind: batch.mode === "daily_brief" ? "daily_brief" : "report",
-    mode: batch.mode,
-    tone: determineReportTone(batch),
-    compact: batch.mode === "quick_check" || batch.mode === "daily_brief",
-    title: titleForBatch(batch),
-    summary: summarizeBatch(batch),
-    tickers: batch.tickers,
-    tickerCount: batch.tickerCount,
-    batchId: batch.batchId,
-    entries: batch.entries,
-    highlights: buildHighlights(batch),
-    dailyBrief: batch.mode === "daily_brief"
+    tone: (row.tone as FeedItem["tone"]) ?? "amber",
+    compact: mode === "quick_check" || mode === "daily_brief",
+    title: row.title,
+    summary: row.summary,
+    tickers: asStringArray(row.tickers),
+    tickerCount: asStringArray(row.tickers).length,
+    batchId: row.job_id ?? row.id,
+    entries,
+    highlights: asStringArray(row.highlights),
+    dailyBrief: kind === "daily_brief" && dailyBriefData
       ? {
-          headline: batch.summary?.headline ?? null,
-          today: batch.summary?.today ?? null,
-          tomorrow: batch.summary?.tomorrow ?? null,
-          marketView: batch.summary?.marketView ?? null,
-          securityNote: batch.summary?.securityNote ?? null,
-          dashboardPath: batch.summary?.dashboardPath ?? null,
+          headline: typeof dailyBriefData["headline"] === "string" ? dailyBriefData["headline"] : null,
+          today: typeof dailyBriefData["today"] === "string" ? dailyBriefData["today"] : null,
+          tomorrow: typeof dailyBriefData["tomorrow"] === "string" ? dailyBriefData["tomorrow"] : null,
+          marketView: typeof dailyBriefData["marketView"] === "string" ? dailyBriefData["marketView"] : null,
+          securityNote: typeof dailyBriefData["securityNote"] === "string" ? dailyBriefData["securityNote"] : null,
+          dashboardPath: typeof dailyBriefData["dashboardPath"] === "string" ? dailyBriefData["dashboardPath"] : null,
         }
       : null,
     event: null,
-  }));
+  };
 }
+
+async function listFeedItems(userId: string, limit = MAX_STORED_EVENTS): Promise<FeedItem[]> {
+  if (!isApplicationDatabaseConfigured()) return [];
+  const ds = await getApplicationDataSource();
+  const rows = (await ds.query(
+    `SELECT id, job_id, kind, title, summary, tone, tickers, highlights, payload, created_at
+       FROM feed_items
+      WHERE user_id = $1
+        AND kind IN ('daily_brief', 'report', 'deep_dive', 'quick_check')
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [userId, limit]
+  )) as FeedItemRow[];
+  return rows.map(rowToFeedItem);
+}
+
 
 export async function listFeedEvents(userId: string, limit = 100): Promise<FeedEventRecord[]> {
   if (!isApplicationDatabaseConfigured()) return [];
@@ -473,9 +301,8 @@ export async function readFeedPage(
   appliedSearch: string | null;
   items: FeedItem[];
 }> {
-  const reportBatches = await listReportBatches(userId, MAX_STORED_EVENTS);
+  const reportItems = await listFeedItems(userId, MAX_STORED_EVENTS);
   const events = await listFeedEvents(userId, MAX_STORED_EVENTS);
-  const reportItems = buildReportFeedItems(reportBatches);
 
   const allItems = [...reportItems, ...events.map(toEventFeedItem)]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())

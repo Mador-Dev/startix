@@ -26,6 +26,16 @@ logger = logging.getLogger(__name__)
 MULTI_TICKER_ACTIONS = {"full_report", "daily_brief"}
 SINGLE_TICKER_ACTIONS = {"deep_dive", "quick_check"}
 
+# Per-action per-ticker timeout overrides (seconds).
+# Deep dive and full report involve multi-step agent chains that can legitimately
+# take several minutes per ticker; the global ticker_timeout_seconds default (180s)
+# is too tight for them.
+_ACTION_TICKER_TIMEOUTS: dict[str, int] = {
+    "deep_dive":   480,   # 8 min — thorough multi-step analysis
+    "full_report": 480,   # 8 min — same depth, many tickers
+    "new_ideas":   300,   # 5 min — exploratory but lighter than deep dive
+}
+
 _MAX_RETRIES = 4
 _RETRY_BASE_DELAY = 2.0  # seconds; doubles each attempt (2, 4, 8, 16)
 
@@ -210,6 +220,9 @@ class JobsService:
                 try:
                     # Load current strategy off the event loop (blocking psycopg call).
                     current_strategy = await asyncio.to_thread(store.load_strategy, user_id, ticker)
+                    ticker_timeout = _ACTION_TICKER_TIMEOUTS.get(
+                        job.action, self.settings.ticker_timeout_seconds
+                    )
                     strategy = await asyncio.wait_for(
                         _invoke_with_retry(
                             self.settings,
@@ -220,15 +233,18 @@ class JobsService:
                             current_strategy=current_strategy,
                             recent_reports=[r for r in reports if r.get("ticker") == ticker],
                         ),
-                        timeout=self.settings.ticker_timeout_seconds,
+                        timeout=ticker_timeout,
                     )
                     return ticker, strategy, None
                 except asyncio.TimeoutError:
+                    ticker_timeout = _ACTION_TICKER_TIMEOUTS.get(
+                        job.action, self.settings.ticker_timeout_seconds
+                    )
                     logger.error(
                         "Ticker %s timed out after %ds in job %s",
-                        ticker, self.settings.ticker_timeout_seconds, job.id,
+                        ticker, ticker_timeout, job.id,
                     )
-                    return ticker, None, f"Analysis timed out after {self.settings.ticker_timeout_seconds}s"
+                    return ticker, None, f"Analysis timed out after {ticker_timeout}s"
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -270,8 +286,10 @@ class JobsService:
         def _save_results() -> None:
             for ticker, strategy, error in results:
                 if strategy is not None:
-                    store.upsert_strategy(user_id, ticker, strategy, guidance_applied=False)
-                    store.write_analysis_artifacts(user_id, job.action, ticker, strategy)
+                    run_id = store.create_analysis_run(job.id, user_id, ticker, job.action)
+                    store.upsert_strategy(user_id, ticker, strategy, guidance_applied=False, run_id=run_id)
+                    store.write_analyst_reports(user_id, ticker, run_id, job.action, strategy)
+                    store.complete_analysis_run(run_id, "completed")
                     strategies.append(strategy)
                     completed.append(ticker)
                 else:
@@ -299,22 +317,15 @@ class JobsService:
         )
         error_parts = "; ".join(f"{t}: {r}" for t, r in failures.items())
         job.error = error_parts[:2000] if error_parts else None
-        job.result = {
-            "strategies": [s.model_dump() for s in strategies],
-            "completedTickers": completed,
-            "failedTickers": list(failures.keys()),
-        }
-        try:
-            batch = store.build_job_batch(job, strategies, completed)
-            if batch:
-                job.result["batch"] = batch
-        except Exception:
-            logger.exception("Failed to build batch for job %s (non-fatal)", job.id)
         self._update_progress(job, completed, failures, None, None)
         try:
             await asyncio.to_thread(store.write_job, job)
         except Exception:
             logger.exception("Failed to write final status for job %s", job.id)
+        try:
+            await asyncio.to_thread(store.insert_feed_item, job, strategies, completed)
+        except Exception:
+            logger.exception("Failed to write feed item for job %s (non-fatal)", job.id)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

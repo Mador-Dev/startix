@@ -1775,12 +1775,18 @@ export function Reports() {
     [feedData]
   );
 
+  // Sync expanded state from URL (deep-link / back-forward navigation).
+  // Intentionally excludes expandedBatchId from deps: the effect should only
+  // fire when the URL-derived batch ID changes, not when the user toggles the
+  // card (which would race with setSearchParams and re-expand a card the user
+  // just collapsed).
   useEffect(() => {
-    if (!linkedBatchId || expandedBatchId === linkedBatchId) return;
+    if (!linkedBatchId) return;
     if (reportItems.some((item) => item.batchId === linkedBatchId)) {
       setExpandedBatchId(linkedBatchId);
     }
-  }, [expandedBatchId, linkedBatchId, reportItems]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedBatchId, reportItems]);
 
   // Derive expanded state
   const expandedItem = reportItems.find((item) => item.batchId === expandedBatchId) ?? null;

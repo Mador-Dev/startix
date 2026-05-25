@@ -166,34 +166,16 @@ class BootstrapService:
                 state.strategy = strategy
                 job.completedTickers.append(ticker)
                 try:
+                    run_id = store.create_analysis_run(job.jobId, payload.userId, ticker, "bootstrap")
                     store.upsert_strategy(
                         payload.userId,
                         ticker,
                         strategy,
                         guidance_applied=ticker in payload.guidance,
+                        run_id=run_id,
                     )
-                    store.upsert_report_artifact(
-                        payload.userId,
-                        ticker,
-                        "strategy",
-                        {
-                            "ticker": ticker,
-                            "verdict": strategy.verdict,
-                            "confidence": strategy.confidence,
-                            "reasoning": strategy.reasoning,
-                            "timeframe": strategy.timeframe,
-                            "entryConditions": [],
-                            "exitConditions": strategy.invalidation_conditions[:5],
-                            "catalysts": [c.model_dump() for c in strategy.catalysts],
-                            "bullCase": strategy.bull_case,
-                            "bearCase": strategy.bear_case,
-                            "updatedAt": utc_now(),
-                        },
-                    )
-                    for name in ("fundamentals", "sentiment", "risk", "debate", "bull_case", "bear_case"):
-                        artifact = strategy.analyst_reports.get(name)
-                        if artifact:
-                            store.upsert_report_artifact(payload.userId, ticker, name, artifact)
+                    store.write_analyst_reports(payload.userId, ticker, run_id, "bootstrap", strategy)
+                    store.complete_analysis_run(run_id, "completed")
                 except Exception:
                     logger.exception("Failed to persist strategy artifacts for ticker %s", ticker)
             else:

@@ -176,7 +176,14 @@ def load_guidance(user_id: str) -> dict[str, dict]:
 # ── Strategies ────────────────────────────────────────────────────────────────
 
 
-def upsert_strategy(user_id: str, ticker: str, draft: TickerStrategyDraft, *, guidance_applied: bool) -> None:
+def upsert_strategy(
+    user_id: str,
+    ticker: str,
+    draft: TickerStrategyDraft,
+    *,
+    guidance_applied: bool,
+    run_id: str | None = None,
+) -> None:
     now = utc_now()
     catalysts = [c.model_dump() for c in draft.catalysts]
     entry_conditions: list[str] = []
@@ -194,10 +201,10 @@ def upsert_strategy(user_id: str, ticker: str, draft: TickerStrategyDraft, *, gu
           user_id, ticker, asset_scope, verdict, confidence, reasoning, timeframe,
           position_size_ils, position_weight_pct, entry_conditions, exit_conditions,
           catalysts, bull_case, bear_case, last_deep_dive_at, metadata,
-          action_catalysts, avoid_conditions, asset_class
+          action_catalysts, avoid_conditions, asset_class, derived_from_run_id
         ) VALUES (
           %s, %s, 'portfolio', %s, %s, %s, %s, 0, 0, %s::jsonb, %s::jsonb,
-          %s::jsonb, %s, %s, %s, %s::jsonb, '[]'::jsonb, %s::jsonb, 'equity'
+          %s::jsonb, %s, %s, %s, %s::jsonb, '[]'::jsonb, %s::jsonb, 'equity', %s
         )
         ON CONFLICT (user_id, ticker) DO UPDATE SET
           asset_scope = EXCLUDED.asset_scope,
@@ -214,6 +221,7 @@ def upsert_strategy(user_id: str, ticker: str, draft: TickerStrategyDraft, *, gu
           metadata = EXCLUDED.metadata,
           action_catalysts = EXCLUDED.action_catalysts,
           avoid_conditions = EXCLUDED.avoid_conditions,
+          derived_from_run_id = EXCLUDED.derived_from_run_id,
           updated_at = NOW()
         """,
         (
@@ -227,6 +235,7 @@ def upsert_strategy(user_id: str, ticker: str, draft: TickerStrategyDraft, *, gu
             now,
             json.dumps(metadata),
             json.dumps(avoid_conditions),
+            run_id,
         ),
     )
 
@@ -269,14 +278,12 @@ def list_strategies(user_id: str) -> list[dict]:
 
 
 def load_strategy(user_id: str, ticker: str) -> dict | None:
-    row = fetch_one(
-        "SELECT payload FROM report_artifacts WHERE user_id = %s AND ticker = %s AND artifact_key = 'strategy'",
-        (user_id, ticker.upper()),
-    )
-    if row and isinstance(row["payload"], dict):
-        return row["payload"]
     s = fetch_one(
-        "SELECT ticker, verdict, confidence, reasoning, timeframe, bull_case, bear_case FROM strategies WHERE user_id = %s AND ticker = %s",
+        """
+        SELECT ticker, verdict, confidence, reasoning, timeframe,
+               bull_case, bear_case, catalysts, exit_conditions, updated_at
+        FROM strategies WHERE user_id = %s AND ticker = %s
+        """,
         (user_id, ticker.upper()),
     )
     if not s:
@@ -289,6 +296,9 @@ def load_strategy(user_id: str, ticker: str) -> dict | None:
         "timeframe": s["timeframe"],
         "bullCase": s.get("bull_case"),
         "bearCase": s.get("bear_case"),
+        "catalysts": s.get("catalysts") or [],
+        "exitConditions": s.get("exit_conditions") or [],
+        "updatedAt": _ts(s.get("updated_at")),
     }
 
 
@@ -314,104 +324,158 @@ def was_daily_brief_run_today(user_id: str) -> bool:
 
 
 def list_report_summaries(user_id: str, limit: int = 5) -> list[dict]:
+    """Returns recent strategy rows as context for the next analysis run."""
     rows = fetch_all(
         """
-        SELECT payload FROM report_artifacts
-        WHERE user_id = %s AND artifact_key IN ('strategy', 'synthesis')
+        SELECT ticker, verdict, confidence, reasoning, timeframe,
+               bull_case, bear_case, catalysts, updated_at
+        FROM strategies
+        WHERE user_id = %s
         ORDER BY updated_at DESC LIMIT %s
         """,
         (user_id, limit),
     )
-    return [r["payload"] for r in rows if isinstance(r.get("payload"), dict)]
+    return [
+        {
+            "ticker": r["ticker"],
+            "verdict": r["verdict"],
+            "confidence": r["confidence"],
+            "reasoning": r["reasoning"],
+            "timeframe": r["timeframe"],
+            "bullCase": r.get("bull_case"),
+            "bearCase": r.get("bear_case"),
+            "catalysts": r.get("catalysts") or [],
+            "updatedAt": _ts(r.get("updated_at")),
+        }
+        for r in rows
+    ]
 
 
-def write_analysis_artifacts(
+# ── Analysis runs ─────────────────────────────────────────────────────────────
+
+
+def create_analysis_run(job_id: str, user_id: str, ticker: str, run_type: str) -> str:
+    row = fetch_one(
+        """
+        INSERT INTO analysis_runs (job_id, user_id, ticker, run_type, status, started_at)
+        VALUES (%s, %s, %s, %s, 'running', NOW())
+        RETURNING id
+        """,
+        (job_id, user_id, ticker.upper(), run_type),
+    )
+    if not row:
+        raise RuntimeError(f"Failed to create analysis_run for {ticker}")
+    return str(row["id"])
+
+
+def complete_analysis_run(run_id: str, status: str) -> None:
+    execute(
+        "UPDATE analysis_runs SET status = %s, completed_at = NOW() WHERE id = %s",
+        (status, run_id),
+    )
+
+
+# ── Analyst reports ───────────────────────────────────────────────────────────
+
+
+def write_analyst_reports(
     user_id: str,
-    action: str,
     ticker: str,
+    run_id: str,
+    action: str,
     strategy: TickerStrategyDraft,
 ) -> None:
+    """Write all analyst outputs from a strategy draft to analyst_reports."""
     now = utc_now()
-    strategy_payload = {
-        "ticker": ticker,
-        "verdict": strategy.verdict,
-        "confidence": strategy.confidence,
-        "reasoning": strategy.reasoning,
-        "timeframe": strategy.timeframe,
-        "entryConditions": [],
-        "exitConditions": strategy.invalidation_conditions[:5],
-        "catalysts": [c.model_dump() for c in strategy.catalysts],
-        "bullCase": strategy.bull_case,
-        "bearCase": strategy.bear_case,
-        "updatedAt": now,
-    }
-    upsert_report_artifact(user_id, ticker, "strategy", strategy_payload)
 
     quick_check_payload = {
-        "score": None,
         "decision": "escalate" if strategy.verdict in {"REDUCE", "SELL", "CLOSE"} else "safe",
         "signals": [strategy.verdict, strategy.confidence, strategy.timeframe],
-        "strategy_health": strategy.invalidation_conditions[:3] or strategy.key_risks[:3],
         "advisor_summary": strategy.reasoning,
         "advisor_reasons": strategy.evidence_summary.supporting[:3] + strategy.evidence_summary.conflicting[:2],
         "escalation_reason": strategy.key_risks[0] if strategy.key_risks else None,
         "updatedAt": now,
         "sourceAction": action,
     }
-    upsert_report_artifact(user_id, ticker, "quick_check", quick_check_payload)
+    _insert_analyst_report(run_id, user_id, ticker, "quick_check", quick_check_payload)
 
-    for artifact_key in ("fundamentals", "technical", "sentiment", "macro", "risk"):
-        report_payload = strategy.analyst_reports.get(artifact_key)
-        if isinstance(report_payload, dict) and report_payload:
-            upsert_report_artifact(user_id, ticker, artifact_key, report_payload)
+    for analyst_type in ("fundamentals", "technical", "sentiment", "macro", "risk"):
+        payload = strategy.analyst_reports.get(analyst_type)
+        if isinstance(payload, dict) and payload:
+            _insert_analyst_report(run_id, user_id, ticker, analyst_type, payload)
 
     if strategy.bull_case:
-        upsert_report_artifact(
-            user_id,
-            ticker,
-            "bull_case",
+        _insert_analyst_report(
+            run_id, user_id, ticker, "bull",
             {"coreThesis": strategy.bull_case, "arguments": [], "round": 1},
         )
     if strategy.bear_case:
-        upsert_report_artifact(
-            user_id,
-            ticker,
-            "bear_case",
+        _insert_analyst_report(
+            run_id, user_id, ticker, "bear",
             {"coreConcern": strategy.bear_case, "arguments": [], "round": 1},
         )
 
+    debate = strategy.analyst_reports.get("debate")
+    if isinstance(debate, dict) and debate:
+        _insert_analyst_report(run_id, user_id, ticker, "debate", debate)
 
-def build_job_batch(job: JobRecord, strategies: list[TickerStrategyDraft], completed: list[str]) -> dict[str, Any] | None:
-    if not strategies or not completed:
-        return None
 
-    entries: dict[str, dict[str, Any]] = {}
+def _insert_analyst_report(
+    run_id: str, user_id: str, ticker: str, analyst_type: str, payload: dict
+) -> None:
+    execute(
+        """
+        INSERT INTO analyst_reports (analysis_run_id, user_id, ticker, analyst_type, payload, generated_at)
+        VALUES (%s, %s, %s, %s, %s::jsonb, NOW())
+        """,
+        (run_id, user_id, ticker.upper(), analyst_type, json.dumps(payload)),
+    )
+
+
+# ── Feed items ────────────────────────────────────────────────────────────────
+
+
+def insert_feed_item(
+    job: JobRecord,
+    strategies: list[TickerStrategyDraft],
+    completed: list[str],
+) -> None:
+    """Write a feed_items row when a job completes so the feed can read it directly."""
+    if not completed:
+        return
+
+    action = job.action
+    tickers = [s.ticker.strip().upper() for s in strategies]
+
+    entries: dict[str, Any] = {}
     for strategy in strategies:
         ticker = strategy.ticker.strip().upper()
         entries[ticker] = {
             "ticker": ticker,
-            "mode": job.action,
+            "mode": action,
             "verdict": strategy.verdict,
             "confidence": strategy.confidence,
             "reasoning": strategy.reasoning,
             "timeframe": strategy.timeframe,
-            "analystTypes": (
-                ["quick_check"]
-                if job.action in {"quick_check", "daily_brief", "full_report"}
-                else [k for k in ("fundamentals", "technical", "sentiment", "macro", "risk") if k in strategy.analyst_reports]
-            ),
+            "analystTypes": [
+                k for k in ("fundamentals", "technical", "sentiment", "macro", "risk")
+                if k in strategy.analyst_reports
+            ],
             "hasBullCase": bool(strategy.bull_case),
             "hasBearCase": bool(strategy.bear_case),
         }
 
     highlights = [
-        f"{item.ticker} {item.verdict} ({item.confidence})"
-        for item in strategies[:3]
+        f"{s.ticker.upper()} {s.verdict} ({s.confidence})"
+        for s in strategies[:3]
     ]
-    summary = None
-    if job.action == "daily_brief":
-        summary = {
-            "headline": f"Daily brief completed across {len(completed)} position{'s' if len(completed) != 1 else ''}.",
+
+    title, summary, kind, tone = _feed_item_meta(action, tickers, strategies, completed)
+
+    daily_brief = None
+    if action == "daily_brief":
+        daily_brief = {
+            "headline": summary,
             "today": "; ".join(highlights[:2]) if highlights else None,
             "tomorrow": None,
             "marketView": None,
@@ -419,18 +483,69 @@ def build_job_batch(job: JobRecord, strategies: list[TickerStrategyDraft], compl
             "dashboardPath": "/reports",
         }
 
-    return {
-        "batchId": job.id,
-        "triggeredAt": job.completed_at or job.started_at or job.triggered_at,
-        "date": (job.completed_at or job.started_at or job.triggered_at)[:10],
-        "mode": job.action,
-        "tickers": completed.copy(),
-        "tickerCount": len(completed),
-        "jobId": job.id,
+    payload = {
+        "mode": action,
         "entries": entries,
-        "summary": summary,
-        "highlights": highlights,
+        "dailyBrief": daily_brief,
     }
+
+    item_id = job.id
+    execute(
+        """
+        INSERT INTO feed_items (id, user_id, job_id, kind, title, summary, tone, tickers, highlights, payload)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+        ON CONFLICT (id) DO UPDATE SET
+          summary = EXCLUDED.summary, payload = EXCLUDED.payload, tone = EXCLUDED.tone
+        """,
+        (
+            item_id, job.user_id, job.id, kind, title, summary, tone,
+            tickers,
+            json.dumps(highlights),
+            json.dumps(payload),
+        ),
+    )
+
+
+def _feed_item_meta(
+    action: str,
+    tickers: list[str],
+    strategies: list[TickerStrategyDraft],
+    completed: list[str],
+) -> tuple[str, str, str, str]:
+    """Returns (title, summary, kind, tone) for a feed item."""
+    count = len(completed)
+    primary = tickers[0] if tickers else "position"
+
+    has_negative = any(s.verdict in {"REDUCE", "SELL", "CLOSE"} for s in strategies)
+    has_positive = any(s.verdict in {"BUY", "ADD"} for s in strategies)
+
+    if action == "daily_brief":
+        title = "Daily brief"
+        escalated = sum(1 for s in strategies if s.verdict in {"REDUCE", "SELL", "CLOSE"})
+        summary = (
+            f"{escalated} position{'s' if escalated != 1 else ''} need closer attention."
+            if escalated else
+            f"Daily brief completed across {count} position{'s' if count != 1 else ''}."
+        )
+        kind = "daily_brief"
+        tone = "rose" if has_negative else "sky"
+    elif action == "deep_dive":
+        title = f"{primary} deep dive"
+        summary = strategies[0].reasoning if strategies else f"Deep dive refreshed for {primary}."
+        kind = "deep_dive"
+        tone = "rose" if has_negative else ("emerald" if has_positive else "amber")
+    elif action == "quick_check":
+        title = f"{primary} quick check"
+        summary = strategies[0].reasoning if strategies else f"Quick check completed for {primary}."
+        kind = "quick_check"
+        tone = "rose" if has_negative else "emerald"
+    else:
+        title = "Full report" if action == "full_report" else action.replace("_", " ").title()
+        summary = f"Full report refreshed across {count} ticker{'s' if count != 1 else ''}."
+        kind = "report"
+        tone = "rose" if has_negative else ("emerald" if has_positive else "amber")
+
+    return title, summary, kind, tone
 
 
 # ── Bootstrap jobs ────────────────────────────────────────────────────────────

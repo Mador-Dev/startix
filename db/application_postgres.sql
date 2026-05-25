@@ -98,6 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_strategies_user_verdict
 CREATE INDEX IF NOT EXISTS idx_strategies_next_review
   ON strategies (user_id, next_review_at)
   WHERE next_review_at IS NOT NULL;
+ALTER TABLE strategies
+  ADD COLUMN IF NOT EXISTS derived_from_run_id UUID;
 
 -- ── Report artifacts ──────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS report_artifacts (
@@ -278,6 +280,69 @@ CREATE TABLE IF NOT EXISTS admin_defaults (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_by TEXT NOT NULL DEFAULT 'system'
 );
+
+-- ── Analysis runs ────────────────────────────────────────────────────────────
+-- One row per (job × ticker). Groups all analyst reports for a single analysis.
+CREATE TABLE IF NOT EXISTS analysis_runs (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id          VARCHAR(128) NOT NULL,
+  user_id         VARCHAR(64) NOT NULL,
+  ticker          VARCHAR(32) NOT NULL,
+  run_type        VARCHAR(32) NOT NULL,
+  status          VARCHAR(32) NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','running','completed','failed')),
+  started_at      TIMESTAMPTZ,
+  completed_at    TIMESTAMPTZ,
+  cost_points     NUMERIC(12,3),
+  progress        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_analysis_runs_job FOREIGN KEY (job_id)
+    REFERENCES jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_analysis_runs_job ON analysis_runs (job_id);
+CREATE INDEX IF NOT EXISTS idx_analysis_runs_user_ticker
+  ON analysis_runs (user_id, ticker, created_at DESC);
+
+-- ── Analyst reports ───────────────────────────────────────────────────────────
+-- One row per analyst per analysis_run. Replaces report_artifacts for new writes.
+CREATE TABLE IF NOT EXISTS analyst_reports (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  analysis_run_id UUID NOT NULL,
+  user_id         VARCHAR(64) NOT NULL,
+  ticker          VARCHAR(32) NOT NULL,
+  analyst_type    VARCHAR(32) NOT NULL,
+  round           INTEGER,
+  payload         JSONB NOT NULL,
+  sources         TEXT[] NOT NULL DEFAULT '{}',
+  generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_analyst_reports_run FOREIGN KEY (analysis_run_id)
+    REFERENCES analysis_runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_analyst_reports_run ON analyst_reports (analysis_run_id);
+CREATE INDEX IF NOT EXISTS idx_analyst_reports_user_ticker
+  ON analyst_reports (user_id, ticker, generated_at DESC);
+
+-- ── Feed items ────────────────────────────────────────────────────────────────
+-- One row per completed job (report/brief/deep_dive). Replaces jobs.result.batch parsing.
+CREATE TABLE IF NOT EXISTS feed_items (
+  id          VARCHAR(64) PRIMARY KEY,
+  user_id     VARCHAR(64) NOT NULL,
+  job_id      VARCHAR(128),
+  kind        VARCHAR(32) NOT NULL
+                CHECK (kind IN ('daily_brief','report','deep_dive','quick_check','market_news')),
+  title       TEXT NOT NULL,
+  summary     TEXT NOT NULL,
+  tone        VARCHAR(16) NOT NULL DEFAULT 'amber',
+  tickers     TEXT[] NOT NULL DEFAULT '{}',
+  highlights  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  payload     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  read_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_feed_items_user FOREIGN KEY (user_id)
+    REFERENCES users(user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_feed_items_user_created
+  ON feed_items (user_id, created_at DESC);
 
 -- ── Feed events ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS feed_events (

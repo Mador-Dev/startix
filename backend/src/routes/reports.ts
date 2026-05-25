@@ -5,6 +5,7 @@ import { guardPath } from "../middleware/userIsolation.js";
 import { readFeedPage } from "../services/feedService.js";
 import { loadUserStrategy } from "../services/strategyAccess.js";
 import { readReportArtifact } from "../services/reportArtifactStore.js";
+import { readLatestAnalystReport } from "../services/analystReportStore.js";
 
 const router = Router();
 
@@ -92,7 +93,10 @@ router.get(
       return;
     }
 
-    const content = await readReportArtifact(ws.userId, ticker, reportType);
+    // Prefer analyst_reports (new), fall back to report_artifacts (legacy data).
+    const content =
+      (await readLatestAnalystReport(ws.userId, ticker, reportType)) ??
+      (await readReportArtifact(ws.userId, ticker, reportType));
     if (!content) {
       res.status(404).json({ error: "Report not found" });
       return;

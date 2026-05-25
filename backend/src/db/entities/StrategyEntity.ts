@@ -49,6 +49,7 @@ export interface StrategyEntity {
   avoidConditions: string[];
   nextReviewAt: Date | null;
   assetClass: StrategyAssetClass;
+  derivedFromRunId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -87,6 +88,7 @@ export const StrategyEntitySchema = new EntitySchema<StrategyEntity>({
     avoidConditions: { name: "avoid_conditions", type: "jsonb" },
     nextReviewAt: { name: "next_review_at", type: "timestamptz", nullable: true },
     assetClass: { name: "asset_class", type: "varchar", length: 16 },
+    derivedFromRunId: { name: "derived_from_run_id", type: "uuid", nullable: true },
     createdAt: { name: "created_at", type: "timestamptz" },
     updatedAt: { name: "updated_at", type: "timestamptz" },
   },

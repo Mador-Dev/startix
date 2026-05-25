@@ -17,8 +17,6 @@ export function HeroStatCard({ value, pnlLine, pnlPositive, portfolioScore, desc
   const border = hasScore ? scoreBorder(tintScore) : "var(--bg-border-mid)";
   const scoreTextColor = hasScore ? scoreColor(tintScore) : "var(--text-tertiary)";
   const scoreShadow = hasScore ? scoreBorder(tintScore) : "rgba(17, 24, 39, 0.18)";
-  const stickerBg = hasScore ? "rgba(255,250,232,0.96)" : "rgba(255,255,255,0.92)";
-  const stickerAccent = "rgba(17, 24, 39, 0.96)";
 
   const pnlColor =
     pnlPositive === true
@@ -40,19 +38,6 @@ export function HeroStatCard({ value, pnlLine, pnlPositive, portfolioScore, desc
         overflow: "hidden",
       }}
     >
-      <div
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          insetInlineEnd: -20,
-          top: -26,
-          width: 120,
-          height: 120,
-          borderRadius: "999px",
-          background: "rgba(255,255,255,0.18)",
-          filter: "blur(1px)",
-        }}
-      />
 
       {/* Top row: score ←→ value */}
       <div
@@ -84,7 +69,7 @@ export function HeroStatCard({ value, pnlLine, pnlPositive, portfolioScore, desc
               style={{
                 fontSize: 10,
                 fontWeight: 700,
-                color: pnlColor,
+                color: "#111827",
                 fontVariantNumeric: "tabular-nums",
                 marginTop: 6,
                 display: "inline-flex",
@@ -101,62 +86,68 @@ export function HeroStatCard({ value, pnlLine, pnlPositive, portfolioScore, desc
           )}
         </div>
 
-        {/* Right: cartoon score sticker */}
+        {/* Right: score widget */}
         <div
           style={{
-            minWidth: 124,
+            minWidth: 108,
             alignSelf: "flex-start",
-            background: stickerBg,
-            border: `2.5px solid ${stickerAccent}`,
-            borderRadius: 20,
-            boxShadow: `5px 5px 0 rgba(34, 30, 26, 0.28)`,
-            padding: "11px 12px 10px",
-            transform: "rotate(1.5deg)",
+            background: "var(--bg-surface)",
+            border: `1px solid ${hasScore ? scoreBorder(tintScore) : "var(--bg-border)"}`,
+            borderRadius: "var(--radius-xl)",
+            padding: "10px 12px 10px",
+            position: "relative",
+            overflow: "hidden",
           }}
         >
+          {/* Color-coded top accent line */}
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 2,
+              background: hasScore ? scoreTextColor : "var(--bg-border-mid)",
+              borderRadius: "var(--radius-xl) var(--radius-xl) 0 0",
+            }}
+          />
           <div
             style={{
               fontSize: 8,
-              fontWeight: 800,
-              color: "rgba(17, 24, 39, 0.78)",
+              fontWeight: 700,
+              color: "var(--text-tertiary)",
               textTransform: "uppercase",
               letterSpacing: "0.12em",
-              textAlign: "center",
+              marginBottom: 6,
             }}
           >
             Portfolio Score
           </div>
           <div
             style={{
-              display: "flex",
-              alignItems: "baseline",
-              justifyContent: "center",
-              gap: 4,
-              marginTop: 6,
-              color: stickerAccent,
+              fontSize: 32,
+              lineHeight: 1,
+              fontWeight: 800,
+              fontVariantNumeric: "tabular-nums",
+              letterSpacing: "-0.05em",
+              color: hasScore ? scoreTextColor : "var(--text-ghost)",
             }}
           >
-            <span
-              style={{
-                fontSize: 32,
-                lineHeight: 1,
-                fontWeight: 900,
-                fontVariantNumeric: "tabular-nums",
-                letterSpacing: "-0.06em",
-                color: "rgba(17, 24, 39, 0.96)",
-              }}
-            >
-              {hasScore ? (portfolioScore as number) : "—"}
-            </span>
-            <span style={{ fontSize: 12, lineHeight: 1, color: "#f59e0b" }}>★</span>
+            {hasScore ? (portfolioScore as number) : "—"}
           </div>
           <div
             style={{
-              marginTop: 4,
-              textAlign: "center",
-              fontSize: 10,
+              marginTop: 7,
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "2px 7px",
+              borderRadius: "var(--radius-pill)",
+              background: hasScore ? scoreBg(tintScore) : "var(--bg-surface-hover)",
+              fontSize: 9,
               fontWeight: 700,
-              color: "rgba(17, 24, 39, 0.78)",
+              color: hasScore ? scoreTextColor : "var(--text-tertiary)",
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
             }}
           >
             {hasScore ? (portfolioScore as number) >= 75 ? "Sharp" : (portfolioScore as number) >= 50 ? "Steady" : "Watchlist" : "Pending"}
