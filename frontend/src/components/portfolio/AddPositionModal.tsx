@@ -4,7 +4,8 @@ import { fetchPortfolio, fetchVerdicts, addPosition } from "../../api/portfolio"
 import { triggerJob } from "../../api/jobs";
 import { TickerSearch } from "../ui/TickerSearch";
 import { useToastStore } from "../../store/toastStore";
-import type { TickerSelection, PositionRow } from "../../types/api";
+import { usePositionGuidance } from "../../hooks/usePositionGuidance";
+import type { TickerSelection, PositionRow, PositionGuidanceHorizon } from "../../types/api";
 
 type UnitCurrency = "USD" | "ILA" | "GBP" | "EUR";
 
@@ -34,6 +35,7 @@ interface AddPositionModalProps {
 export function AddPositionModal({ open, onClose, onEditExisting, preferredAccount }: AddPositionModalProps) {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
+  const { updateGuidance } = usePositionGuidance();
 
   const [selected, setSelected] = useState<TickerSelection | null>(null);
   const [account, setAccount] = useState("");
@@ -41,6 +43,11 @@ export function AddPositionModal({ open, onClose, onEditExisting, preferredAccou
   const [avgBuyPrice, setAvgBuyPrice] = useState("");
   const [force, setForce] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Optional thesis capture at add time
+  const [thesisOpen, setThesisOpen] = useState(false);
+  const [thesis, setThesis] = useState("");
+  const [horizon, setHorizon] = useState<PositionGuidanceHorizon>("unspecified");
 
   const { data: portfolio } = useQuery({
     queryKey: ["portfolio"],
@@ -97,6 +104,9 @@ export function AddPositionModal({ open, onClose, onEditExisting, preferredAccou
     setShares("");
     setAvgBuyPrice("");
     setForce(false);
+    setThesis("");
+    setHorizon("unspecified");
+    setThesisOpen(false);
     onClose();
   };
 
@@ -134,6 +144,11 @@ export function AddPositionModal({ open, onClose, onEditExisting, preferredAccou
         }
       } else {
         showToast("Position added", "success");
+      }
+
+      // Save thesis if the user filled it in
+      if (thesis.trim() && selected) {
+        void updateGuidance(selected.symbol, { thesis: thesis.trim(), horizon });
       }
 
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
@@ -305,6 +320,47 @@ export function AddPositionModal({ open, onClose, onEditExisting, preferredAccou
                     </p>
                   </div>
                 )}
+
+                {/* Optional thesis — collapsible */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setThesisOpen((o) => !o)}
+                    className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-fg-subtle)]"
+                  >
+                    <span style={{ color: "rgba(99,102,241,0.8)" }}>
+                      {thesisOpen ? "▾" : "▸"}
+                    </span>
+                    <span style={{ color: "rgba(99,102,241,0.8)" }}>
+                      Why are you buying? (optional)
+                    </span>
+                  </button>
+
+                  {thesisOpen && (
+                    <div className="mt-2 space-y-2">
+                      <textarea
+                        value={thesis}
+                        onChange={(e) => setThesis(e.target.value)}
+                        placeholder="Brief investment thesis — what's your case?"
+                        rows={3}
+                        maxLength={400}
+                        className="w-full bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-xl px-3 py-2.5 text-xs text-[var(--color-fg-default)] outline-none resize-none focus:border-indigo-500/50"
+                        style={{ fontSize: "16px" }}
+                      />
+                      <select
+                        value={horizon}
+                        onChange={(e) => setHorizon(e.target.value as PositionGuidanceHorizon)}
+                        className="w-full bg-[var(--color-bg-muted)] border border-[var(--color-border)] rounded-xl px-3 py-2.5 text-xs text-[var(--color-fg-default)] outline-none"
+                      >
+                        <option value="unspecified">Horizon: Unspecified</option>
+                        <option value="days">Days</option>
+                        <option value="weeks">Weeks</option>
+                        <option value="months">Months</option>
+                        <option value="years">Years</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>

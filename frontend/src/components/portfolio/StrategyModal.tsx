@@ -23,7 +23,11 @@ import {
   nextCatalyst,
   reasoningSnippet,
 } from "../../utils/advisory";
-import type { StrategyRow, AttentionItem, PositionRow, Verdict } from "../../types/api";
+import type { StrategyRow, AttentionItem, PositionRow, Verdict, VerdictRow } from "../../types/api";
+import { ThesisSection } from "./ThesisSection";
+import { ScoreBreakdown } from "./ScoreBreakdown";
+import { usePositionGuidance } from "../../hooks/usePositionGuidance";
+import { healthScore, DEFAULT_STOP_LOSS_PCT } from "../../utils/today/healthScore";
 
 interface StrategyModalProps {
   ticker: string | null;
@@ -206,6 +210,7 @@ export function StrategyModal({
           {data && (
             <DetailContent
               strategy={data}
+              ticker={ticker}
               attentionItem={attentionItem ?? null}
               attentionRank={attentionRank}
               score={score}
@@ -274,6 +279,7 @@ export function StrategyModal({
 
 function DetailContent({
   strategy,
+  ticker,
   attentionItem,
   attentionRank,
   score,
@@ -281,15 +287,21 @@ function DetailContent({
   language,
 }: {
   strategy: StrategyRow;
+  ticker: string | null;
   attentionItem: AttentionItem | null;
   attentionRank?: number;
   score?: number;
   position: PositionRow | null;
   language: "en" | "he";
 }) {
+  const { guidanceMap, updateGuidance } = usePositionGuidance();
   const verdictLine = VERDICT_LINE[strategy.verdict];
   const heroScore = score ?? 0;
   const hasScore = score !== undefined && Number.isFinite(score);
+
+  const scoreBreakdown = hasScore
+    ? healthScore(strategy as unknown as VerdictRow, position ?? undefined, DEFAULT_STOP_LOSS_PCT).breakdown
+    : null;
 
   const whyText = attentionItem
     ? whyToday(attentionItem, language)
@@ -394,9 +406,12 @@ function DetailContent({
 
       {/* Score bar */}
       {hasScore && (
-        <div style={{ paddingBottom: 16 }}>
+        <div style={{ paddingBottom: scoreBreakdown ? 4 : 16 }}>
           <ScoreBar score={heroScore} />
         </div>
+      )}
+      {hasScore && scoreBreakdown && (
+        <ScoreBreakdown breakdown={scoreBreakdown} score={heroScore} />
       )}
 
       <Divider />
@@ -569,6 +584,18 @@ function DetailContent({
         </div>
       )}
 
+      {/* Your thesis */}
+      {ticker && (
+        <>
+          <Divider />
+          <ThesisSection
+            ticker={ticker}
+            guidance={guidanceMap[ticker]}
+            onUpdate={updateGuidance}
+          />
+        </>
+      )}
+
       <Divider />
 
       {/* Conditions — exit first (most actionable), then entry */}
@@ -583,6 +610,7 @@ function DetailContent({
             kind="exit"
             text={c}
             label={language === "he" ? "יציאה" : "EXIT"}
+            verdict={strategy.verdict}
           />
         ))}
         {strategy.entryConditions.map((c, i) => (
@@ -591,6 +619,7 @@ function DetailContent({
             kind="entry"
             text={c}
             label={language === "he" ? "כניסה" : "ENTRY"}
+            verdict={strategy.verdict}
           />
         ))}
         {strategy.entryConditions.length + strategy.exitConditions.length === 0 && (
@@ -694,15 +723,36 @@ function ConditionRow({
   kind,
   text,
   label,
+  verdict,
 }: {
   kind: "entry" | "exit";
   text: string;
   label: string;
+  verdict?: Verdict;
 }) {
-  const dotColor = kind === "exit" ? "var(--color-amber)" : "var(--text-ghost)";
-  // Reserved for Phase 2 per-condition state icons
-  void Check;
-  void AlertTriangle;
+  let Icon: typeof Circle | typeof Check | typeof AlertTriangle = Circle;
+  let dotColor = kind === "exit" ? "var(--color-amber)" : "var(--text-ghost)";
+
+  if (verdict) {
+    if (kind === "entry") {
+      if (verdict === "BUY" || verdict === "ADD") {
+        Icon = Check;
+        dotColor = "var(--color-green)";
+      } else if (verdict === "REDUCE" || verdict === "SELL" || verdict === "CLOSE") {
+        Icon = AlertTriangle;
+        dotColor = "var(--color-amber)";
+      }
+    } else {
+      if (verdict === "SELL" || verdict === "CLOSE") {
+        Icon = AlertTriangle;
+        dotColor = "var(--color-red)";
+      } else if (verdict === "REDUCE") {
+        Icon = AlertTriangle;
+        dotColor = "var(--color-amber)";
+      }
+    }
+  }
+
   return (
     <div
       style={{
@@ -713,10 +763,10 @@ function ConditionRow({
         borderTop: "0.5px solid var(--bg-border)",
       }}
     >
-      <Circle
+      <Icon
         size={10}
         color={dotColor}
-        style={{ marginTop: 4, flexShrink: 0, fill: dotColor }}
+        style={{ marginTop: 4, flexShrink: 0 }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", lineHeight: 1.4 }}>

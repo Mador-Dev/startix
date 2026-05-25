@@ -413,3 +413,14 @@ export interface HealthScore {
 }
 
 export type HealthLabel = "healthy" | "steady" | "watch";
+
+export interface ClosedPositionRecord {
+  ticker: string;
+  closedAt: string;       // ISO date string
+  exitReason: string;
+  exitNote: string;
+  finalPlPct: number;
+  finalPlILS: number;
+  shares: number;
+  avgPriceILS: number;
+}

@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Check, Circle, AlertTriangle } from "lucide-reac
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createChart, ColorType, CandlestickSeries, LineSeries } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, CandlestickData, LineData } from "lightweight-charts";
-import { fetchPositionHistory, updatePosition } from "../../api/portfolio";
+import { fetchPositionHistory, updatePosition, deletePosition } from "../../api/portfolio";
 import { fetchStrategy } from "../../api/strategies";
 import { triggerJob } from "../../api/jobs";
 import { useToastStore } from "../../store/toastStore";
@@ -11,11 +11,17 @@ import { usePreferencesStore } from "../../store/preferencesStore";
 import { t, tConfidence } from "../../store/i18n";
 import { formatILS, formatPct, timeAgo } from "../../utils/format";
 import { scoreColor } from "../../utils/today/scoreColor";
-import type { PositionRow, VerdictRow, Verdict } from "../../types/api";
+import type { PositionRow, VerdictRow, Verdict, ClosedPositionRecord } from "../../types/api";
 import { Spinner } from "../ui/Spinner";
 import { ActionBadge } from "../design/ActionBadge";
 import { ScoreBar } from "../design/HeroStatCard";
 import { StatCell } from "../design/StatCell";
+import { ThesisSection } from "./ThesisSection";
+import { ScoreBreakdown } from "./ScoreBreakdown";
+import { ClosePositionModal } from "./ClosePositionModal";
+import { usePositionGuidance } from "../../hooks/usePositionGuidance";
+import { healthScore, DEFAULT_STOP_LOSS_PCT } from "../../utils/today/healthScore";
+import { saveClosedPosition } from "../../utils/closedPositions";
 
 interface PositionDetailModalProps {
   position: PositionRow | null;
@@ -145,11 +151,30 @@ function BullBearCard({ label, color, text }: { label: string; color: string; te
   );
 }
 
-function ConditionRow({ kind, text, label }: { kind: "entry" | "exit"; text: string; label: string }) {
-  const Icon = Circle;
-  const dotColor = "var(--text-ghost)";
-  void Check;
-  void AlertTriangle;
+function ConditionRow({ kind, text, label, verdict }: { kind: "entry" | "exit"; text: string; label: string; verdict?: Verdict }) {
+  let Icon: typeof Circle | typeof Check | typeof AlertTriangle = Circle;
+  let dotColor = "var(--text-ghost)";
+
+  if (verdict) {
+    if (kind === "entry") {
+      if (verdict === "BUY" || verdict === "ADD") {
+        Icon = Check;
+        dotColor = "var(--color-green)";
+      } else if (verdict === "REDUCE" || verdict === "SELL" || verdict === "CLOSE") {
+        Icon = AlertTriangle;
+        dotColor = "var(--color-amber)";
+      }
+    } else {
+      if (verdict === "SELL" || verdict === "CLOSE") {
+        Icon = AlertTriangle;
+        dotColor = "var(--color-red)";
+      } else if (verdict === "REDUCE") {
+        Icon = AlertTriangle;
+        dotColor = "var(--color-amber)";
+      }
+    }
+  }
+
   return (
     <div
       style={{
@@ -160,7 +185,7 @@ function ConditionRow({ kind, text, label }: { kind: "entry" | "exit"; text: str
         borderTop: "0.5px solid var(--bg-border)",
       }}
     >
-      <Icon size={10} color={dotColor} style={{ marginTop: 4, flexShrink: 0, fill: dotColor }} />
+      <Icon size={10} color={dotColor} style={{ marginTop: 4, flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", lineHeight: 1.4, fontWeight: "var(--weight-regular)" }}>
           {text}
@@ -208,6 +233,9 @@ export function PositionDetailModal({ position, verdict, score, onClose, onDelet
   const [accountEdits, setAccountEdits] = useState<Record<string, { shares: string; avgPriceILS: string }>>({});
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [closePositionOpen, setClosePositionOpen] = useState(false);
+
+  const { guidanceMap, updateGuidance } = usePositionGuidance();
 
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -376,6 +404,37 @@ export function PositionDetailModal({ position, verdict, score, onClose, onDelet
 
   const hasMultipleAccounts = (position.accountBreakdown?.length ?? 0) > 1;
   const canDelete = !!onDeletePosition && !hasMultipleAccounts && (position.accounts?.length ?? 0) === 1;
+
+  // Compute score breakdown for ScoreBreakdown component — prefer live verdict, fall back to strategy
+  const scoreBreakdown = verdict
+    ? healthScore(verdict, position ?? undefined, DEFAULT_STOP_LOSS_PCT).breakdown
+    : strategy
+    ? healthScore(strategy as unknown as VerdictRow, position ?? undefined, DEFAULT_STOP_LOSS_PCT).breakdown
+    : null;
+
+  const handleClosePosition = async (record: Omit<ClosedPositionRecord, "ticker" | "closedAt">) => {
+    if (!position) return;
+    // 1. Save to local history before touching backend
+    saveClosedPosition({
+      ticker: position.ticker,
+      closedAt: new Date().toISOString(),
+      ...record,
+    });
+    setClosePositionOpen(false);
+    // 2. Remove from portfolio backend (handle single + multi account)
+    try {
+      const breakdowns = position.accountBreakdown ?? [];
+      if (breakdowns.length > 1) {
+        await Promise.all(breakdowns.map((b) => deletePosition(position.ticker, b.account)));
+      } else {
+        await deletePosition(position.ticker, position.accounts?.[0]);
+      }
+    } catch {
+      // Non-fatal — record is saved; user can remove manually
+    }
+    showToast(`${position.ticker} closed · saved to history`, "success");
+    onClose();
+  };
 
   const inputCls: React.CSSProperties = {
     width: "100%",
@@ -562,9 +621,12 @@ export function PositionDetailModal({ position, verdict, score, onClose, onDelet
           </div>
 
           {hasScore && (
-            <div style={{ paddingBottom: 12 }}>
+            <div style={{ paddingBottom: scoreBreakdown ? 4 : 12 }}>
               <ScoreBar score={scoreVal} />
             </div>
+          )}
+          {hasScore && scoreBreakdown && (
+            <ScoreBreakdown breakdown={scoreBreakdown} score={scoreVal} />
           )}
 
           <Divider />
@@ -789,6 +851,14 @@ export function PositionDetailModal({ position, verdict, score, onClose, onDelet
             </>
           )}
 
+          {/* ── Your thesis ── */}
+          <Divider />
+          <ThesisSection
+            ticker={position.ticker}
+            guidance={guidanceMap[position.ticker]}
+            onUpdate={updateGuidance}
+          />
+
           {/* ── Strategy content ── */}
           {(strategyLoading && !strategy) && (
             <div style={{ display: "flex", justifyContent: "center", padding: "24px 0" }}>
@@ -854,10 +924,10 @@ export function PositionDetailModal({ position, verdict, score, onClose, onDelet
                   />
                   <div style={{ padding: "0 16px 16px" }}>
                     {strategy.entryConditions.map((c, i) => (
-                      <ConditionRow key={`e-${i}`} kind="entry" text={c} label={language === "he" ? "כניסה" : "ENTRY"} />
+                      <ConditionRow key={`e-${i}`} kind="entry" text={c} label={language === "he" ? "כניסה" : "ENTRY"} verdict={verdictType} />
                     ))}
                     {strategy.exitConditions.map((c, i) => (
-                      <ConditionRow key={`x-${i}`} kind="exit" text={c} label={language === "he" ? "יציאה" : "EXIT"} />
+                      <ConditionRow key={`x-${i}`} kind="exit" text={c} label={language === "he" ? "יציאה" : "EXIT"} verdict={verdictType} />
                     ))}
                   </div>
                 </>
@@ -999,6 +1069,24 @@ export function PositionDetailModal({ position, verdict, score, onClose, onDelet
             )}
             <button
               type="button"
+              onClick={() => setClosePositionOpen(true)}
+              style={{
+                padding: "12px 14px",
+                borderRadius: "var(--radius-md)",
+                background: "transparent",
+                color: "var(--color-red)",
+                border: "0.5px solid var(--color-red-border)",
+                fontSize: "var(--text-sm)",
+                fontWeight: "var(--weight-bold)",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+              }}
+            >
+              {language === "he" ? "סגור פוזיציה" : "Close position"}
+            </button>
+            <button
+              type="button"
               onClick={onClose}
               style={{
                 flex: ctaLabel ? 0 : 1,
@@ -1013,11 +1101,20 @@ export function PositionDetailModal({ position, verdict, score, onClose, onDelet
                 whiteSpace: "nowrap",
               }}
             >
-              {language === "he" ? "סגור" : "Dismiss · keep"}
+              {language === "he" ? "סגור" : "Dismiss"}
             </button>
           </div>
         )}
       </div>
+
+      {/* ── Close position modal — z-index 60/70 (above this modal's 50) ── */}
+      {closePositionOpen && (
+        <ClosePositionModal
+          position={position}
+          onCancel={() => setClosePositionOpen(false)}
+          onConfirm={handleClosePosition}
+        />
+      )}
     </div>
   );
 }

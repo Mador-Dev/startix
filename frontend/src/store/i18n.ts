@@ -165,7 +165,7 @@ export const translations: Translations = {
     portfolioTab: "Portfolio",
     alertsTab: "Feed",
     reportsTab: "Feed",
-    strategiesTab: "Strategies",
+    strategiesTab: "Analysis",
     controlsTab: "Controls",
     chatTab: "Chat",
     // Login
@@ -628,7 +628,7 @@ export const translations: Translations = {
     portfolioTab: "תיק",
     alertsTab: "פיד",
     reportsTab: "פיד",
-    strategiesTab: "אסטרטגיות",
+    strategiesTab: "ניתוח",
     controlsTab: "בקרה",
     chatTab: "צ'אט",
     // Login

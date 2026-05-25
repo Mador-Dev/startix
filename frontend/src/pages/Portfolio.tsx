@@ -29,7 +29,8 @@ import { HeroStatCard } from "../components/design/HeroStatCard";
 import { StatCell } from "../components/design/StatCell";
 import { classifyAttention } from "../utils/today/classifyAttention";
 import { healthScore, portfolioHealthScore, DEFAULT_STOP_LOSS_PCT } from "../utils/today/healthScore";
-import type { VerdictRow, PositionRow as PositionRowType, AttentionItem } from "../types/api";
+import { getClosedPositions } from "../utils/closedPositions";
+import type { VerdictRow, PositionRow as PositionRowType, AttentionItem, ClosedPositionRecord } from "../types/api";
 
 /** One-liner portfolio health summary for the HeroStatCard description slot. */
 function buildPortfolioDescription(attentionCount: number, total: number): string {
@@ -167,6 +168,8 @@ export function Portfolio() {
   const [addPositionOpen, setAddPositionOpen] = useState(false);
   const [accountManagerOpen, setAccountManagerOpen] = useState(false);
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({});
+  const [closedPositions, setClosedPositions] = useState<ClosedPositionRecord[]>(() => getClosedPositions());
+  const [closedHistoryOpen, setClosedHistoryOpen] = useState(false);
 
   const { data: portfolio, isLoading, error, refetch } = useQuery({
     queryKey: ["portfolio"],
@@ -740,6 +743,110 @@ export function Portfolio() {
         </button>
       </div>
 
+      {/* Closed positions history — localStorage, collapsible */}
+      {closedPositions.length > 0 && (
+        <div style={{ margin: "8px 16px 0" }}>
+          <button
+            type="button"
+            onClick={() => setClosedHistoryOpen((o) => !o)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              padding: "8px 0",
+              width: "100%",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "var(--text-2xs)",
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                color: "var(--text-tertiary)",
+                fontWeight: "var(--weight-regular)",
+                flex: 1,
+                textAlign: "start",
+              }}
+            >
+              Closed positions ({closedPositions.length})
+            </span>
+            {closedHistoryOpen
+              ? <ChevronUp size={12} color="var(--text-tertiary)" />
+              : <ChevronDown size={12} color="var(--text-tertiary)" />}
+          </button>
+
+          {closedHistoryOpen && (
+            <div
+              style={{
+                borderTop: "0.5px solid var(--bg-border)",
+                paddingTop: 4,
+              }}
+            >
+              {closedPositions.map((record, i) => {
+                const plPositive = record.finalPlPct >= 0;
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "10px 0",
+                      borderBottom: "0.5px solid var(--bg-border)",
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontSize: "var(--text-sm)",
+                          fontWeight: "var(--weight-bold)",
+                          color: "var(--text-primary)",
+                          fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                        }}
+                      >
+                        {record.ticker}
+                      </div>
+                      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-tertiary)", marginTop: 2 }}>
+                        {record.exitReason} ·{" "}
+                        {new Date(record.closedAt).toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "end" }}>
+                      <div
+                        style={{
+                          fontSize: "var(--text-sm)",
+                          fontWeight: "var(--weight-bold)",
+                          color: plPositive ? "var(--color-green)" : "var(--color-red)",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {plPositive ? "+" : ""}{record.finalPlPct.toFixed(2)}%
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "var(--text-xs)",
+                          color: "var(--text-tertiary)",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {record.shares} shares
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Power-user expander — Group by account, default-collapsed */}
       {accountSummaries.length > 0 && (
         <details
@@ -898,6 +1005,7 @@ export function Portfolio() {
         score={selectedPosition ? tickerScores.get(selectedPosition.ticker) : undefined}
         onClose={() => {
           setSelectedPosition(null);
+          setClosedPositions(getClosedPositions());
           refetch();
         }}
         onDeletePosition={handleDeleteSelectedPosition}
